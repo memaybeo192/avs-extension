@@ -1,0 +1,54 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "*avs-shield*",
+      "resourceTypes": ["script"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "/api/ads/active",
+      "resourceTypes": ["xmlhttprequest"]
+    }
+  },
+  {
+    "id": 3,
+    "priority": 2,
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [
+        { "header": "Access-Control-Allow-Origin",  "operation": "set", "value": "*" },
+        { "header": "Access-Control-Allow-Methods", "operation": "set", "value": "GET, POST, OPTIONS, HEAD" },
+        { "header": "Access-Control-Allow-Headers", "operation": "set", "value": "*" },
+        { "header": "Access-Control-Expose-Headers","operation": "set", "value": "*" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "googleusercontent.com",
+      "resourceTypes": ["xmlhttprequest", "other"]
+    }
+  },
+  {
+    "id": 4,
+    "priority": 2,
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [
+        { "header": "Access-Control-Allow-Origin",  "operation": "set", "value": "*" },
+        { "header": "Access-Control-Allow-Methods", "operation": "set", "value": "GET, POST, OPTIONS, HEAD" },
+        { "header": "Access-Control-Allow-Headers", "operation": "set", "value": "*" },
+        { "header": "Access-Control-Expose-Headers","operation": "set", "value": "*" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "googleapiscdn.com",
+      "resourceTypes": ["xmlhttprequest", "other"]
+    }
+  }
+]

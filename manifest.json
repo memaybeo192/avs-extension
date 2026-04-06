@@ -1,0 +1,50 @@
+{
+  "manifest_version": 3,
+  "name": "AVS Cleaner",
+  "version": "3.1",
+  "author": "Lam",
+  "description": "Dọn dẹp quảng cáo, chặn popup và tải video cho AnimeVietSub.",
+
+  "permissions": [
+    "declarativeNetRequest",
+    "declarativeNetRequestWithHostAccess",
+    "storage"
+  ],
+
+  "host_permissions": [
+    "*://*.animevietsub.id/*",
+    "*://*.googleapiscdn.com/*",
+    "*://*.googleusercontent.com/*",
+    "https://raw.githubusercontent.com/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "declarative_net_request": {
+    "rule_resources": [{
+      "id": "ruleset_1",
+      "enabled": true,
+      "path": "rules.json"
+    }]
+  },
+
+  "web_accessible_resources": [{
+    "resources": ["assets/logoz.png"],
+    "matches": [
+      "*://*.animevietsub.id/*"
+    ]
+  }],
+
+  "content_scripts": [{
+    "matches": [
+      "*://*.animevietsub.id/*",
+      "*://*.googleapiscdn.com/*"
+    ],
+    "js": ["content.js"],
+    "run_at": "document_start",
+    "all_frames": true,
+    "world": "MAIN"
+  }]
+}
