@@ -444,9 +444,12 @@
         XMLHttpRequest.prototype.send = function(...args) {
             this.addEventListener('load', function() {
                 try {
-                    const edgeTag = this.getResponseHeader('X-Edge-Tag');
-                    if (edgeTag && !IS_SEGMENT.test(this._avsUrl)) {
-                        _playlistUrl = this._avsUrl.startsWith('http') ? this._avsUrl : new URL(this._avsUrl, location.href).href;
+                    const allHeaders = this.getAllResponseHeaders().toLowerCase();
+                    if (allHeaders.includes('x-edge-tag')) {
+                        const edgeTag = this.getResponseHeader('X-Edge-Tag');
+                        if (edgeTag && !IS_SEGMENT.test(this._avsUrl)) {
+                            _playlistUrl = this._avsUrl.startsWith('http') ? this._avsUrl : new URL(this._avsUrl, location.href).href;
+                        }
                     }
                 } catch(e) {}
             });
