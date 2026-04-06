@@ -144,35 +144,6 @@
             };
         })();
 
-        // ── ARTPLAYER GESTURE FIX ────────────────────────────
-        // Chặn ArtPlayer bắt touchmove để tránh tua không chủ ý khi vuốt
-        (function fixArtplayerTouch() {
-            let startX = 0;
-            let startY = 0;
-
-            window.addEventListener('touchstart', (e) => {
-                startX = e.touches[0].clientX;
-                startY = e.touches[0].clientY;
-            }, { capture: true, passive: true });
-
-            window.addEventListener('touchmove', (e) => {
-                // Cho phép kéo thanh thời gian bình thường
-                if (e.target.closest('.art-progress') || e.target.closest('.art-bottom')) {
-                    return;
-                }
-
-                const currX = e.touches[0].clientX;
-                const currY = e.touches[0].clientY;
-                const deltaX = Math.abs(currX - startX);
-                const deltaY = Math.abs(currY - startY);
-
-                if (deltaX > 5 || deltaY > 5) {
-                    e.stopImmediatePropagation();
-                    // e.preventDefault(); // bật nếu muốn chống cuộn trang khi fullscreen
-                }
-            }, { capture: true, passive: false });
-        })();
-
         // ── TOAST "XEM NGAY" FIX ────────────────────────────
         // Dùng touchstart thay click để phản hồi chính xác trên mobile
         const fixPlayerToastTouch = () => {
@@ -643,7 +614,6 @@
             pointer-events: none !important; position: absolute !important;
             left: -9999px !important; z-index: -9999 !important;
         }
-        .art-backdrop { background: transparent !important; display: none !important; }
         body { padding-top: 0 !important; }
     `;
     const injectStyle = () => {
