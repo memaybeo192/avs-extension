@@ -261,7 +261,17 @@
             return out;
         }
 
-        // Giải mã dùng key + signInput đã lưu trong bộ nhớ
+        async function avsDecryptFull(ciphertext, edgeTag, proxyDigest, requestTrace, cacheNode) {
+            const keyBytes   = base64urlToBytes(edgeTag);
+            const hmacKey    = await crypto.subtle.importKey('raw', keyBytes, { name:'HMAC', hash:'SHA-256' }, false, ['sign']);
+            const signInput  = new TextEncoder().encode(`${proxyDigest}:${requestTrace}:${cacheNode}`);
+            const aesMat     = await crypto.subtle.sign('HMAC', hmacKey, signInput);
+            const aesKey     = await crypto.subtle.importKey('raw', aesMat, { name:'AES-GCM' }, false, ['decrypt']);
+            const iv         = keyBytes.slice(0, 12);
+            const plain      = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, aesKey, ciphertext);
+            return new TextDecoder().decode(plain);
+        }
+
         async function avsDecryptCached(ciphertext) {
             if (!_lastKeyBytes || !_lastSignInput) {
                 throw new Error('Chưa có key. Hãy đợi video load rồi thử lại.');
@@ -269,9 +279,9 @@
             const hmacKey = await crypto.subtle.importKey(
                 'raw', _lastKeyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
             );
-            const aesKeyMaterial = await crypto.subtle.sign('HMAC', hmacKey, _lastSignInput);
+            const aesMat = await crypto.subtle.sign('HMAC', hmacKey, _lastSignInput);
             const aesKey = await crypto.subtle.importKey(
-                'raw', aesKeyMaterial, { name: 'AES-GCM' }, false, ['decrypt']
+                'raw', aesMat, { name: 'AES-GCM' }, false, ['decrypt']
             );
             const iv = _lastKeyBytes.slice(0, 12);
             const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ciphertext);
@@ -286,25 +296,34 @@
             const edgeTag      = resp.headers.get('X-Edge-Tag')      || '';
             const cacheNode    = resp.headers.get('X-Cache-Node')    || '';
             const requestTrace = resp.headers.get('X-Request-Trace') || '0';
-            const proxyDigest  = resp.headers.get('X-Proxy-Digest')  || '';
+            const proxyDigest  = decodeURIComponent(
+                resp.headers.get('X-Proxy-Digest') || 'anon'
+            );
 
-            if (!edgeTag || !cacheNode) {
-                return resp.text();
+            const rawText = await resp.text();
+
+            if (!edgeTag || !cacheNode) return rawText;
+
+            const lines = rawText.split('\n');
+            const isNewFormat = lines.some(l => l && !l.startsWith('#') && /[?&]_c=[0-9]+/.test(l));
+
+            if (isNewFormat) {
+                const tTokens = lines
+                    .filter(l => l && !l.startsWith('#'))
+                    .map(l => { const m = l.match(/[?&]_t=([^&\s]+)/); return m ? m[1] : ''; })
+                    .join('');
+                if (!tTokens) return rawText;
+
+                const ciphertextBuf = new Uint8Array(tTokens.length);
+                for (let i = 0; i < tTokens.length; i++) {
+                    ciphertextBuf[i] = tTokens.charCodeAt(i) & 0xff;
+                }
+                return await avsDecryptFull(ciphertextBuf.buffer, edgeTag, proxyDigest, requestTrace, cacheNode);
+            } else {
+                const bytes = new Uint8Array(rawText.length);
+                for (let i = 0; i < rawText.length; i++) bytes[i] = rawText.charCodeAt(i) & 0xff;
+                return await avsDecryptFull(bytes.buffer, edgeTag, proxyDigest, requestTrace, cacheNode);
             }
-
-            const keyBytes = base64urlToBytes(edgeTag);
-            const hmacKey  = await crypto.subtle.importKey(
-                'raw', keyBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
-            );
-            const signInput      = new TextEncoder().encode(`${proxyDigest}:${requestTrace}:${cacheNode}`);
-            const aesKeyMaterial = await crypto.subtle.sign('HMAC', hmacKey, signInput);
-            const aesKey         = await crypto.subtle.importKey(
-                'raw', aesKeyMaterial, { name: 'AES-GCM' }, false, ['decrypt']
-            );
-            const iv         = keyBytes.slice(0, 12);
-            const ciphertext = await resp.arrayBuffer();
-            const plain      = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ciphertext);
-            return new TextDecoder().decode(plain);
         }
 
         // Ưu tiên: re-fetch URL (token mới) → fallback ciphertext cũ
@@ -386,25 +405,52 @@
         };
 
         // Capture playlist URL từ fetch + XHR (bỏ qua segment URLs)
-        const IS_SEGMENT = /\/chunks\/.+\/video\d+\.html/;
+        const IS_SEGMENT = /\/chunks\/.+\/video\d+\.html|\.ts([?#]|$)|si=\d+|seq=\d+/;
 
         const _origFetch = window.fetch;
         window.fetch = async function(input, init) {
             const url = (typeof input === 'string') ? input
                       : (input instanceof Request)  ? input.url : String(input);
-            if (!IS_SEGMENT.test(url) && /googleapiscdn\.com/.test(url)) {
-                _playlistUrl = url;
+            const strUrl = String(url);
+            
+            if (!IS_SEGMENT.test(strUrl) && (strUrl.includes('.m3u8') || strUrl.includes('playlist') || strUrl.includes('googleapiscdn.com') || strUrl.includes('googleusercontent.com'))) {
+                try {
+                    _playlistUrl = strUrl.startsWith('http') ? strUrl : new URL(strUrl, location.href).href;
+                } catch(e) {}
             }
-            return _origFetch.call(this, input, init);
+            
+            const response = await _origFetch.call(this, input, init);
+            try {
+                if (response && response.headers && response.headers.get('X-Edge-Tag') && !IS_SEGMENT.test(strUrl)) {
+                    _playlistUrl = strUrl.startsWith('http') ? strUrl : new URL(strUrl, location.href).href;
+                }
+            } catch(e) {}
+            return response;
         };
 
         const _origXHROpen = XMLHttpRequest.prototype.open;
         XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-            if (url && !IS_SEGMENT.test(url) && /googleapiscdn\.com/.test(url)) {
-                _playlistUrl = url;
+            const strUrl = String(url);
+            if (!IS_SEGMENT.test(strUrl) && (strUrl.includes('.m3u8') || strUrl.includes('playlist') || strUrl.includes('googleapiscdn.com') || strUrl.includes('googleusercontent.com'))) {
+                try {
+                    _playlistUrl = strUrl.startsWith('http') ? strUrl : new URL(strUrl, location.href).href;
+                } catch(e) {}
             }
-            this._avsUrl = url;
+            this._avsUrl = strUrl;
             return _origXHROpen.call(this, method, url, ...rest);
+        };
+
+        const _origXHRSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.send = function(...args) {
+            this.addEventListener('load', function() {
+                try {
+                    const edgeTag = this.getResponseHeader('X-Edge-Tag');
+                    if (edgeTag && !IS_SEGMENT.test(this._avsUrl)) {
+                        _playlistUrl = this._avsUrl.startsWith('http') ? this._avsUrl : new URL(this._avsUrl, location.href).href;
+                    }
+                } catch(e) {}
+            });
+            return _origXHRSend.apply(this, args);
         };
 
         // Download: tải theo burst để tránh Cloudflare rate-limit
@@ -634,7 +680,7 @@
     function injectDownloadButton(segmentCount) {
         const existing = document.getElementById('avs-dl-btn');
         if (existing) {
-            existing.textContent     = `⬇ Tải video (${segmentCount} phân đoạn)`;
+            existing.textContent     = segmentCount > 0 ? `⬇ Tải video (${segmentCount} phân đoạn)` : existing.textContent;
             existing.disabled        = false;
             existing.style.background = '#27ae60';
             return;
@@ -642,7 +688,7 @@
 
         const btn = document.createElement('button');
         btn.id = 'avs-dl-btn';
-        btn.textContent = `⬇ Tải video (${segmentCount} phân đoạn)`;
+        btn.textContent = segmentCount > 0 ? `⬇ Tải video (${segmentCount} phân đoạn)` : '⬇ Tải video';
         btn.style.cssText = `
             position: fixed; bottom: 20px; right: 20px; z-index: 999999;
             padding: 10px 18px; background: #27ae60; color: #fff;
@@ -721,6 +767,38 @@
     window.addEventListener('load', () => {
         _playerIframe = getPlayerIframe();
     });
+
+    // Fallback: nếu JWPlayer không postMessage AVS_READY (không dùng crypto.subtle.decrypt flow),
+    // inject button sau timeout khi iframe đã load xong.
+    (function fallbackButtonInject() {
+        let _injected = false;
+        const tryInject = () => {
+            if (_injected) return;
+            const iframe = getPlayerIframe();
+            if (!iframe) return;
+            // Chỉ inject nếu button chưa có (AVS_READY chưa fire)
+            if (document.getElementById('avs-dl-btn')) { _injected = true; return; }
+            _injected = true;
+            injectDownloadButton(0); // count=0 = "không rõ số segment"
+            // Update text sau khi inject
+            const btn = document.getElementById('avs-dl-btn');
+            if (btn) btn.textContent = '⬇ Tải video';
+        };
+
+        // Thử sau 4s và 8s (JWPlayer có thể load chậm hơn ArtPlayer)
+        setTimeout(tryInject, 4000);
+        setTimeout(tryInject, 8000);
+
+        // Cũng watch iframe load event
+        const watchIframe = () => {
+            const iframe = getPlayerIframe();
+            if (iframe && !iframe._avsWatched) {
+                iframe._avsWatched = true;
+                iframe.addEventListener('load', () => setTimeout(tryInject, 2000));
+            }
+        };
+        setInterval(watchIframe, 500);
+    })();
 
     // Nhận lệnh chuyển tập từ player frame (AVS_FORCE_NEXT)
     window.addEventListener('message', (e) => {
