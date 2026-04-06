@@ -392,8 +392,12 @@
             
             const response = await _origFetch.call(this, input, init);
             try {
-                if (response && response.headers && response.headers.get('X-Edge-Tag') && !IS_SEGMENT.test(strUrl)) {
-                    _playlistUrl = strUrl.startsWith('http') ? strUrl : new URL(strUrl, location.href).href;
+                if (response && response.headers && !IS_SEGMENT.test(strUrl)) {
+                    let hasEdge = false;
+                    try { hasEdge = response.headers.has('X-Edge-Tag'); } catch(e) {}
+                    if (hasEdge || response.headers.get('X-Edge-Tag')) {
+                        _playlistUrl = strUrl.startsWith('http') ? strUrl : new URL(strUrl, location.href).href;
+                    }
                 }
             } catch(e) {}
             return response;
@@ -415,8 +419,8 @@
         XMLHttpRequest.prototype.send = function(...args) {
             this.addEventListener('load', function() {
                 try {
-                    const allHeaders = this.getAllResponseHeaders().toLowerCase();
-                    if (allHeaders.includes('x-edge-tag')) {
+                    const allHeaders = this.getAllResponseHeaders();
+                    if (allHeaders && allHeaders.toLowerCase().includes('x-edge-tag')) {
                         const edgeTag = this.getResponseHeader('X-Edge-Tag');
                         if (edgeTag && !IS_SEGMENT.test(this._avsUrl)) {
                             _playlistUrl = this._avsUrl.startsWith('http') ? this._avsUrl : new URL(this._avsUrl, location.href).href;
