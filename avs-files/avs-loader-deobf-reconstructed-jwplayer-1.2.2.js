@@ -13,6 +13,14 @@
  * objects (like stats.parsing) that were handled implicitly in the original context.
  * 
  * ═══════════════════════════════════════════════════════════
+ * CHANGES FROM v1.1.x (ArtPlayer Version)
+ * ═══════════════════════════════════════════════════════════
+ * 1. Manifest Format: M3U8 response now contains URLs with `_c=` parameters.
+ * 2. Token Extraction: Ciphertext is constructed by extracting `_t=` from each URL line.
+ * 3. Header Encoding: X-Proxy-Digest is now URI-encoded.
+ * 4. Reconstruction: EXTINF headers are prepended if the decrypted output is a URL list.
+ * 
+ * ═══════════════════════════════════════════════════════════
  * DEOBFUSCATION METHODOLOGY (v1.2.0 Trace)
  * ═══════════════════════════════════════════════════════════
  *
