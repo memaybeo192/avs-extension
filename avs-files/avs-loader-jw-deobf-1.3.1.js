@@ -13,8 +13,44 @@
  * stability to the de-obfuscated logic, specifically by explicitly defining 
  * objects (like stats.parsing) that were handled implicitly in the original context.
  * 
- * It is a functional bridge between raw de-obfuscated logic and a working runtime.
- * 
+ * ═══════════════════════════════════════════════════════════
+ * DEOBFUSCATION METHODOLOGY (v1.3.1 Trace)
+ * ═══════════════════════════════════════════════════════════
+ *
+ * Obfuscator: javascript-obfuscator (High Compression)
+ * Techniques identified:
+ *   1. String array          — all literals moved to a central array
+ *   2. Control flow flattening — massively complex switch-case state machine
+ *   3. Hex identifiers        — all variable/property names replaced with _0xNNNN
+ *
+ * ── Step 1: Identify the string decoder ───────────────────
+ *   Located the internal string lookup function. It uses a base offset to index 
+ *   into the rotated string array.
+ *
+ * ── Step 2: Control Flow Unflattening ─────────────────────
+ *   By tracing the sequence string (e.g., "1|4|0|3|2"), we mapped the 
+ *   disjointed switch cases back into a linear logical flow.
+ *
+ * ── Step 3: Identify Security Headers ─────────────────────
+ *   Discovered the usage of X-Edge-Tag, X-Cache-Node, X-Proxy-Digest, and 
+ *   X-Request-Trace. These are retrieved from the XHR response headers.
+ *
+ * ── Step 4: Reconstruct Crypto Chain ──────────────────────
+ *   Confirmed HMAC-SHA256 signature order for AES key derivation:
+ *   AES_KEY = HMAC(Key: X-Edge-Tag, Data: `${proxyDigest}:${requestTrace}:${cacheNode}`)
+ *
+ * ── Step 5: Verify via Dynamic Trace ──────────────────────
+ *   Patched Web Crypto API in the browser to intercept cleartext and IV.
+ *   Verified IV = first 12 bytes of decoded X-Edge-Tag.
+ *
+ * ═══════════════════════════════════════════════════════════
+ * CONFIRMED CRYPTO CHAIN
+ * ═══════════════════════════════════════════════════════════
+ *  Step 1  importKey(HMAC-SHA-256, raw, base64url_decode(X-Edge-Tag))
+ *  Step 2  sign("${proxyDigest}:${requestTrace}:${cacheNode}") -> AES Key Material
+ *  Step 3  importKey(AES-GCM, raw, hmac_output_32_bytes)
+ *  Step 4  decrypt(AES-GCM, iv=X-Edge-Tag_raw[0..11], ciphertext)
+ *
  * ── ARCHITECTURE (RECONSTRUCTED) ────────────────────────────────────────────────────────
  * This implementation follows the "Monkey-Patching" pattern observed in the original
  * AVS security modules. It acts as a transparent proxy between HLS.js and the server.
@@ -36,27 +72,6 @@
     } catch (e) { return new Uint8Array(); }
   }
 
-  /**
-   * ======================================================================================
-   * DEEP DIVE: AVS v1.3.1 DECRYPTION & DE-OBFUSCATION STRATEGY
-   * ======================================================================================
-   * 
-   * 1. OBFUSCATION ANALYSIS:
-   *    The original source (avs-loader.min.js) used "Control Flow Flattening" (CFF).
-   *    By tracing the sequence, we discovered the linear execution of the decryption:
-   *    - Step 1: Gather raw tokens (_t=) from the .m3u8 body.
-   *    - Step 2: Extract security headers (X-Edge-Tag, X-Cache-Node, etc.).
-   *    - Step 3: Use Web Crypto Subtle API to derive keys and decrypt.
-   * 
-   * 2. KEY DERIVATION (The "Secret Sauce"):
-   *    Formula: AES_KEY = HMAC_SHA256(Key = X-Edge-Tag, Data = proxyDigest + ":" + requestTrace + ":" + cacheNode)
-   *    Order is strictly `${proxyDigest}:${requestTrace}:${cacheNode}`.
-   * 
-   * 3. AES-GCM PARAMETERS:
-   *    - Ciphertext: All `_t` tokens joined.
-   *    - IV (Initialization Vector): First 12 bytes of decoded `X-Edge-Tag`.
-   * ======================================================================================
-   */
   async function avsDecrypt(ciphertext, edgeTag, cacheNode, proxyDigest, requestTrace) {
     const edgeTagBytes = base64urlToBytes(edgeTag);
     const hmacKey = await crypto.subtle.importKey(
