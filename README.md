@@ -1,6 +1,6 @@
-# AVS Cleaner
+# AVS Extension
 
-AVS Cleaner là một tiện ích mở rộng (browser extension) được thiết kế nhằm tối ưu hóa trải nghiệm người dùng trên hệ thống AnimeVietSub. Tiện ích cung cấp các công cụ loại bỏ quảng cáo, vô hiệu hóa script chống gỡ lỗi (anti-debugging), và hỗ trợ tải xuống luồng video được mã hóa.
+AVS Extension là một tiện ích mở rộng (browser extension) được thiết kế nhằm tối ưu hóa trải nghiệm người dùng trên hệ thống AnimeVietSub. Tiện ích cung cấp các công cụ loại bỏ quảng cáo, vô hiệu hóa script chống gỡ lỗi (anti-debugging), và hỗ trợ tải xuống luồng video được mã hóa.
 
 ## Tính năng chính
 
