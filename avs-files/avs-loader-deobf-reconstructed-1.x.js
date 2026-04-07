@@ -1,11 +1,10 @@
 /**
  * ========================================================================================
- * ANIMEVIETSUB (AVS) HLS PLAYLIST DECRYPTION MODULE - v1.1.0 (ARTPLAYER SMART WRAPPER)
+ * ANIMEVIETSUB (AVS) HLS PLAYLIST DECRYPTION MODULE - v1.1.0
  * ========================================================================================
  * 
  * ⚠️ RECONSTRUCTION & MODIFICATION NOTICE:
- * This source code is a DE-OBFUSCATED and RECONSTRUCTED version of the original 
- * AVS security module. 
+ * This source code is a DE-OBFUSCATED version of the original AVS security module.
  * 
  * NOTE: The original minified/obfuscated code works perfectly in its native environment. 
  * However, manual de-obfuscation often breaks implicit dependencies and internal 
@@ -14,7 +13,7 @@
  * objects (like stats.parsing) that were handled implicitly in the original context.
  *
  * ═══════════════════════════════════════════════════════════
- * DEOBFUSCATION METHODOLOGY
+ * DEOBFUSCATION METHODOLOGY (Full Reconstruction)
  * ═══════════════════════════════════════════════════════════
  *
  * Obfuscator: javascript-obfuscator (standard config)
@@ -74,14 +73,8 @@
  *   rename obfuscated identifiers by context:
  *     _0x8a54c3  →  avsDecrypt
  *     _0x10abc0  →  base64urlToBytes
- *     _0x3c458e  →  dataToString (unused in final version)
+ *     _0x3c458e  →  dataToString
  *     _0x495230  →  toUint8Array
- *
- *   Export names decoded:
- *     _avsCryptoSupported  =  s(0x217)+"Crypto"+s(0x1f2)+s(0x171)+s(0x207)
- *     AvsPlaylistLoader    =  s(0x1d3)+s(0x1e9)+"istL"+s(0x216)+"r"
- *     AvsEncryptedLoader   =  s(0x21f)+s(0x209)+...
- *     AvsDecryptPlaylist   =  s(0x1fa)+s(0x1b7)+s(0x173)+s(0x1ce)+"st"
  *
  * ── Step 5: Verify via dynamic trace ─────────────────────
  *
@@ -91,18 +84,19 @@
  *   - signInput = "98a645a...e68eb:1775275088:BH1P9u...RknIQ"
  *   - aesKeyMaterial (32 bytes) = 5180b7397c2ed6ca...c9b6ca71
  *   - iv = keyBytes[0..11] = 6754db4e8ad00c1be583ab59
- *   - ciphertext comes from responseType="text" → latin1 charCodeAt() → ArrayBuffer
- *     (NOT token-based parsing; entire response body is the ciphertext)
+ *   - ciphertext comes from responseType="text" → ArrayBuffer
  *
  * ═══════════════════════════════════════════════════════════
  * CONFIRMED CRYPTO CHAIN
  * ═══════════════════════════════════════════════════════════
+ *
  *  Step 1  importKey(HMAC-SHA-256, raw, base64url_decode(X-Edge-Tag))
  *  Step 2  sign("{X-Proxy-Digest}:{X-Request-Trace}:{X-Cache-Node}")
  *           → 32-byte HMAC output = AES-GCM key material
  *  Step 3  importKey(AES-GCM, raw, hmac_output_32_bytes)
  *  Step 4  decrypt(AES-GCM, iv=X-Edge-Tag_raw[0..11], ciphertext)
  *           → plaintext = M3U8 body with real segment URLs
+ * ═══════════════════════════════════════════════════════════
  */
 
 (function (window) {
@@ -123,53 +117,59 @@
 
   async function avsDecrypt(ciphertext, edgeTag, cacheNode, proxyDigest, requestTrace) {
     const edgeTagBytes = base64urlToBytes(edgeTag);
-    const hmacKey = await crypto.subtle.importKey(
-      'raw', edgeTagBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
-    );
+    const hmacKey = await crypto.subtle.importKey('raw', edgeTagBytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     const signInput = new TextEncoder().encode(`${proxyDigest}:${requestTrace}:${cacheNode}`);
     const aesKeyMaterial = await crypto.subtle.sign('HMAC', hmacKey, signInput);
-    const aesKey = await crypto.subtle.importKey(
-      'raw', aesKeyMaterial, { name: 'AES-GCM' }, false, ['decrypt']
-    );
+    const aesKey = await crypto.subtle.importKey('raw', aesKeyMaterial, { name: 'AES-GCM' }, false, ['decrypt']);
     const iv = edgeTagBytes.slice(0, 12);
     const ciphertextBytes = new Uint8Array(ciphertext);
     const plaintextBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ciphertextBytes);
     return new TextDecoder().decode(plaintextBuffer);
   }
 
-  function createAvsLoader(BaseLoader) {
-    return function (config) {
-      const loader = new BaseLoader(config);
-      Object.defineProperties(this, { stats: { get: () => loader.stats }, context: { get: () => loader.context } });
-      this.load = function (context, config, callbacks) {
-        if (context.type === 'manifest') context.responseType = 'arraybuffer';
-        const originalSuccess = callbacks.onSuccess;
-        callbacks.onSuccess = function (response, stats, context, xhr) {
-          const getH = (n) => (xhr?.getResponseHeader?.(n) || xhr?.headers?.get?.(n) || '');
-          const edgeTag = getH('X-Edge-Tag');
-          const cacheNode = getH('X-Cache-Node');
-          if (!edgeTag || !cacheNode || context.type !== 'manifest') return originalSuccess(response, stats, context, xhr);
-          const requestTrace = getH('X-Request-Trace') || '0';
-          const proxyDigest = getH('X-Proxy-Digest') || '';
-          avsDecrypt(response.data, edgeTag, cacheNode, proxyDigest, requestTrace)
-            .then(decrypted => {
-              response.data = decrypted;
-              if (stats && !stats.parsing) stats.parsing = { start: 0, end: 0 };
-              originalSuccess(response, stats, context, xhr);
-            })
-            .catch(err => callbacks.onError({ code: 0, text: err.message }, context, xhr));
-        };
-        loader.load(context, config, callbacks);
-      };
-      this.abort = () => loader.abort();
-      this.destroy = () => loader.destroy();
-    };
+  function AvsLoader(config) {
+    this.stats = { trequest: 0, tfirst: 0, tload: 0, loaded: 0, total: 0, retry: 0,
+                   loading: { start: 0, first: 0, end: 0 }, parsing: { start: 0, end: 0 }, buffering: { start: 0, first: 0, end: 0 } };
+    this.xhr = null;
   }
 
-  const DefaultHlsLoader = (window.Hls && window.Hls.DefaultConfig && window.Hls.DefaultConfig.loader);
-  if (DefaultHlsLoader) {
-    window.AvsPlaylistLoader = createAvsLoader(DefaultHlsLoader);
-    window.AvsEncryptedLoader = createAvsLoader(DefaultHlsLoader);
-  }
+  AvsLoader.prototype.load = function (context, config, callbacks) {
+    if (context.type === 'manifest') context.responseType = 'arraybuffer';
+    this.context = context;
+    const xhr = this.xhr = new XMLHttpRequest();
+    const stats = this.stats;
+    stats.trequest = stats.loading.start = performance.now();
+    xhr.open('GET', context.url, true);
+    if (context.responseType) xhr.responseType = context.responseType;
+    xhr.onload = () => {
+      stats.tload = stats.loading.end = performance.now();
+      let data = xhr.response || xhr.responseText;
+      const response = { url: xhr.responseURL, data: data };
+      if (context.type === 'manifest' && xhr.getResponseHeader('X-Edge-Tag')) {
+        const edgeTag = xhr.getResponseHeader('X-Edge-Tag');
+        const cacheNode = xhr.getResponseHeader('X-Cache-Node');
+        const requestTrace = xhr.getResponseHeader('X-Request-Trace') || '0';
+        const proxyDigest = xhr.getResponseHeader('X-Proxy-Digest') || '';
+        avsDecrypt(data, edgeTag, cacheNode, proxyDigest, requestTrace).then(decrypted => {
+          response.data = decrypted;
+          stats.loaded = stats.total = response.data.length;
+          if (stats.parsing) stats.parsing.start = performance.now();
+          callbacks.onSuccess(response, stats, context, xhr);
+        }).catch(err => callbacks.onError({ code: 0, text: err.message }, context, xhr));
+        return;
+      }
+      stats.loaded = stats.total = (data.byteLength !== undefined ? data.byteLength : data.length);
+      callbacks.onSuccess(response, stats, context, xhr);
+    };
+    xhr.onerror = () => callbacks.onError({ code: xhr.status, text: xhr.statusText }, context, xhr);
+    xhr.send();
+  };
+
+  AvsLoader.prototype.abort = function () { if (this.xhr) this.xhr.abort(); };
+  AvsLoader.prototype.destroy = function () { this.abort(); this.xhr = null; };
+
+  window.AvsPlaylistLoader = AvsLoader;
+  window.AvsEncryptedLoader = AvsLoader;
   window._avsCryptoSupported = isSupported;
+
 })(window);
