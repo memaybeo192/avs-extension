@@ -175,10 +175,24 @@
         // Initial run
         document.querySelectorAll('video').forEach(hookVideo);
         killAd();
-        // MutationObserver thay setInterval — chỉ chạy khi DOM thực sự thay đổi
+
+        // Observer chỉ chạy cho đến khi video được hook + DOM ổn định,
+        // sau đó disconnect để không fire liên tục khi JWPlayer update progress bar.
+        let _adObserverFires = 0;
         const _adObserver = new MutationObserver(() => {
             document.querySelectorAll('video').forEach(hookVideo);
             killAd();
+            _adObserverFires++;
+            // Sau 15 lần fire, kiểm tra video đã được hook chưa.
+            // Nếu rồi thì chuyển sang passive mode: chỉ lắng nghe pause/play trực tiếp.
+            if (_adObserverFires >= 15) {
+                _adObserver.disconnect();
+                const vid = document.querySelector('video');
+                if (vid) {
+                    vid.addEventListener('pause', killAd, { capture: true, passive: true });
+                    vid.addEventListener('play',  killAd, { capture: true, passive: true });
+                }
+            }
         });
         _adObserver.observe(document.documentElement, { childList: true, subtree: true });
 
@@ -344,6 +358,7 @@
                     .filter(l => l && !l.startsWith('#'));
                 if (segs.length > 0 && segs[0].startsWith('http')) {
                     _segmentCount = segs.length;
+                    _urlCaptureDone = true; // không cần capture URL nữa
                     window.parent.postMessage({ type: 'AVS_READY', count: segs.length }, '*');
                 }
             } catch(e) {}
@@ -352,6 +367,7 @@
 
         // Capture playlist URL từ fetch + XHR (bỏ qua segment URLs)
         const IS_SEGMENT = /\/chunks\/.+\/video\d+\.html|\.ts([?#]|$)|si=\d+|seq=\d+/;
+        let _urlCaptureDone = false; // tắt capture sau khi đã có _playlistUrl
 
         const _origFetch = window.fetch;
         window.fetch = async function(input, init) {
@@ -359,29 +375,31 @@
                       : (input instanceof Request)  ? input.url : String(input);
             const strUrl = String(url);
             
-            if (!IS_SEGMENT.test(strUrl) && (strUrl.includes('.m3u8') || strUrl.includes('playlist') || strUrl.includes('googleapiscdn.com') || strUrl.includes('googleusercontent.com'))) {
+            if (!_urlCaptureDone && !IS_SEGMENT.test(strUrl) && (strUrl.includes('.m3u8') || strUrl.includes('playlist') || strUrl.includes('googleapiscdn.com') || strUrl.includes('googleusercontent.com'))) {
                 try {
                     _playlistUrl = strUrl.startsWith('http') ? strUrl : new URL(strUrl, location.href).href;
                 } catch(e) {}
             }
             
             const response = await _origFetch.call(this, input, init);
-            try {
-                if (response && response.headers && !IS_SEGMENT.test(strUrl)) {
-                    let hasEdge = false;
-                    try { hasEdge = response.headers.has('X-Edge-Tag'); } catch(e) {}
-                    if (hasEdge || response.headers.get('X-Edge-Tag')) {
-                        _playlistUrl = strUrl.startsWith('http') ? strUrl : new URL(strUrl, location.href).href;
+            if (!_urlCaptureDone) {
+                try {
+                    if (response && response.headers && !IS_SEGMENT.test(strUrl)) {
+                        let hasEdge = false;
+                        try { hasEdge = response.headers.has('X-Edge-Tag'); } catch(e) {}
+                        if (hasEdge || response.headers.get('X-Edge-Tag')) {
+                            _playlistUrl = strUrl.startsWith('http') ? strUrl : new URL(strUrl, location.href).href;
+                        }
                     }
-                }
-            } catch(e) {}
+                } catch(e) {}
+            }
             return response;
         };
 
         const _origXHROpen = XMLHttpRequest.prototype.open;
         XMLHttpRequest.prototype.open = function(method, url, ...rest) {
             const strUrl = String(url);
-            if (!IS_SEGMENT.test(strUrl) && (strUrl.includes('.m3u8') || strUrl.includes('playlist') || strUrl.includes('googleapiscdn.com') || strUrl.includes('googleusercontent.com'))) {
+            if (!_urlCaptureDone && !IS_SEGMENT.test(strUrl) && (strUrl.includes('.m3u8') || strUrl.includes('playlist') || strUrl.includes('googleapiscdn.com') || strUrl.includes('googleusercontent.com'))) {
                 try {
                     _playlistUrl = strUrl.startsWith('http') ? strUrl : new URL(strUrl, location.href).href;
                 } catch(e) {}
@@ -393,6 +411,7 @@
         const _origXHRSend = XMLHttpRequest.prototype.send;
         XMLHttpRequest.prototype.send = function(...args) {
             this.addEventListener('load', function() {
+                if (_urlCaptureDone) return;
                 try {
                     const allHeaders = this.getAllResponseHeaders();
                     if (allHeaders && allHeaders.toLowerCase().includes('x-edge-tag')) {
@@ -412,6 +431,8 @@
         const JITTER_MIN     = 100;
         const JITTER_MAX     = 200;
 
+        let _downloadAborted = false;
+
         // Lấy origin của main frame động từ document.referrer
         const _mainOrigin = (() => {
             try {
@@ -426,6 +447,7 @@
         })();
 
         async function downloadSegments(filename) {
+            _downloadAborted = false;
             window.parent.postMessage({ type: 'AVS_PROGRESS', current: 0, total: 0, phase: 'playlist' }, '*');
 
             let urls;
@@ -433,6 +455,11 @@
                 urls = await getSegmentUrls();
             } catch(err) {
                 window.parent.postMessage({ type: 'AVS_ERROR', msg: err.message }, '*');
+                return;
+            }
+
+            if (_downloadAborted) {
+                window.parent.postMessage({ type: 'AVS_CANCELLED' }, '*');
                 return;
             }
 
@@ -445,10 +472,23 @@
             const chunks = new Array(total);
 
             for (let i = 0; i < total; i++) {
+                if (_downloadAborted) {
+                    window.parent.postMessage({ type: 'AVS_CANCELLED' }, '*');
+                    return;
+                }
+
                 if (i > 0 && i % BURST_SIZE === 0) {
                     const cooldown = BURST_COOLDOWN + Math.random() * 1000;
                     window.parent.postMessage({ type: 'AVS_COOLDOWN', remaining: Math.ceil(cooldown/1000), current: i, total }, '*');
-                    await new Promise(r => setTimeout(r, cooldown));
+                    // Cooldown interruptible: check mỗi 500ms
+                    const steps = Math.ceil(cooldown / 500);
+                    for (let s = 0; s < steps; s++) {
+                        if (_downloadAborted) {
+                            window.parent.postMessage({ type: 'AVS_CANCELLED' }, '*');
+                            return;
+                        }
+                        await new Promise(r => setTimeout(r, Math.min(500, cooldown - s * 500)));
+                    }
                 }
 
                 const jitter = JITTER_MIN + Math.random() * (JITTER_MAX - JITTER_MIN);
@@ -458,6 +498,10 @@
                 let backoffBase = 5000;
 
                 while (retries > 0) {
+                    if (_downloadAborted) {
+                        window.parent.postMessage({ type: 'AVS_CANCELLED' }, '*');
+                        return;
+                    }
                     try {
                         const response = await fetch(urls[i], {
                             method: 'GET',
@@ -530,6 +574,9 @@
                 downloadSegments(e.data.filename).catch(err => {
                     window.parent.postMessage({ type: 'AVS_ERROR', msg: err.message }, '*');
                 });
+            }
+            if (e.data?.type === 'AVS_DOWNLOAD_CANCEL') {
+                _downloadAborted = true;
             }
         });
 
@@ -617,6 +664,7 @@
     new MutationObserver(cleaner).observe(document.documentElement, { childList: true, subtree: true });
 
     let _playerIframe = null;
+    let _isDownloading = false;
 
     function getPlayerIframe() {
         return Array.from(document.querySelectorAll('iframe'))
@@ -631,27 +679,53 @@
         btn.disabled         = disabled;
     }
 
+    function setCancelBtn(visible) {
+        const btn = document.getElementById('avs-cancel-btn');
+        if (!btn) return;
+        btn.style.display = visible ? 'inline-block' : 'none';
+    }
+
     function injectDownloadButton(segmentCount) {
-        const existing = document.getElementById('avs-dl-btn');
-        if (existing) {
-            existing.textContent     = segmentCount > 0 ? `⬇ Tải video (${segmentCount} phân đoạn)` : existing.textContent;
-            existing.disabled        = false;
-            existing.style.background = '#27ae60';
+        if (document.getElementById('avs-dl-btn')) {
+            const btn = document.getElementById('avs-dl-btn');
+            if (segmentCount > 0 && !_isDownloading) {
+                btn.textContent     = `⬇ Tải video (${segmentCount} phân đoạn)`;
+                btn.disabled        = false;
+                btn.style.background = '#27ae60';
+            }
             return;
         }
+
+        const wrap = document.createElement('div');
+        wrap.id = 'avs-btn-wrap';
+        wrap.style.cssText = `
+            position: fixed; bottom: 20px; right: 20px; z-index: 999999;
+            display: flex; gap: 8px; align-items: center;
+        `;
 
         const btn = document.createElement('button');
         btn.id = 'avs-dl-btn';
         btn.textContent = segmentCount > 0 ? `⬇ Tải video (${segmentCount} phân đoạn)` : '⬇ Tải video';
         btn.style.cssText = `
-            position: fixed; bottom: 20px; right: 20px; z-index: 999999;
             padding: 10px 18px; background: #27ae60; color: #fff;
             border: none; border-radius: 8px; font-size: 14px; font-weight: bold;
             cursor: pointer; box-shadow: 0 2px 12px rgba(0,0,0,0.4);
             transition: background 0.2s;
         `;
 
+        const cancelBtn = document.createElement('button');
+        cancelBtn.id = 'avs-cancel-btn';
+        cancelBtn.textContent = '✕ Huỷ';
+        cancelBtn.style.cssText = `
+            display: none;
+            padding: 10px 14px; background: #c0392b; color: #fff;
+            border: none; border-radius: 8px; font-size: 14px; font-weight: bold;
+            cursor: pointer; box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+            transition: background 0.2s;
+        `;
+
         btn.addEventListener('click', () => {
+            if (_isDownloading) return;
             _playerIframe = getPlayerIframe();
             if (!_playerIframe) {
                 alert('Không tìm thấy player. Hãy đợi video load xong rồi thử lại.');
@@ -663,11 +737,25 @@
                 .slice(0, 80);
             const filename = rawTitle ? `${rawTitle}.ts` : `avs_video_${Date.now()}.ts`;
 
+            _isDownloading = true;
             setBtn('Đang chuẩn bị...', '#8e44ad', true);
+            setCancelBtn(true);
             _playerIframe.contentWindow.postMessage({ type: 'AVS_DOWNLOAD_START', filename }, '*');
         });
 
-        document.body.appendChild(btn);
+        cancelBtn.addEventListener('click', () => {
+            if (!_isDownloading) return;
+            _playerIframe = _playerIframe || getPlayerIframe();
+            if (_playerIframe) {
+                _playerIframe.contentWindow.postMessage({ type: 'AVS_DOWNLOAD_CANCEL' }, '*');
+            }
+            cancelBtn.disabled = true;
+            cancelBtn.textContent = 'Đang huỷ...';
+        });
+
+        wrap.appendChild(btn);
+        wrap.appendChild(cancelBtn);
+        document.body.appendChild(wrap);
     }
 
     window.addEventListener('message', (e) => {
@@ -706,13 +794,25 @@
             }
 
             case 'AVS_DONE': {
+                _isDownloading = false;
                 const mb = (d.bytes / 1048576).toFixed(1);
                 setBtn(`✓ Xong! ${mb} MB`, '#27ae60', false);
+                setCancelBtn(false);
                 break;
             }
 
+            case 'AVS_CANCELLED':
+                _isDownloading = false;
+                setBtn('⬇ Tải video', '#27ae60', false);
+                setCancelBtn(false);
+                { const cb = document.getElementById('avs-cancel-btn'); if (cb) { cb.disabled = false; cb.textContent = '✕ Huỷ'; } }
+                break;
+
             case 'AVS_ERROR':
+                _isDownloading = false;
                 setBtn('⬇ Tải video (thử lại)', '#e74c3c', false);
+                setCancelBtn(false);
+                { const cb = document.getElementById('avs-cancel-btn'); if (cb) { cb.disabled = false; cb.textContent = '✕ Huỷ'; } }
                 alert(`Lỗi: ${d.msg}`);
                 break;
         }
