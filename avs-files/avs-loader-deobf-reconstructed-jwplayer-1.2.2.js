@@ -13,7 +13,32 @@
  * stability to the de-obfuscated logic, specifically by explicitly defining 
  * objects (like stats.parsing) that were handled implicitly in the original context.
  * 
- * It is a functional bridge between raw de-obfuscated logic and a working runtime.
+ * ═══════════════════════════════════════════════════════════
+ * DEOBFUSCATION METHODOLOGY (v1.2.0 Trace)
+ * ═══════════════════════════════════════════════════════════
+ *
+ * Obfuscator: javascript-obfuscator (v2.x)
+ * ── Step 1: Recover String Array ──────────────────────────
+ *   The module used a rotated string array. The rotation was verified by 
+ *   matching the checksum of the shifted array elements.
+ *
+ * ── Step 2: Extract Security Logic ────────────────────────
+ *   Identified the hybrid nature of the manifest (Binary vs Token).
+ *   Logic was unflattened from the primary switch-case dispatcher.
+ *
+ * ── Step 3: Key Derivation Confirmation ───────────────────
+ *   AES Key = HMAC_SHA256(X-Edge-Tag, `${proxyDigest}:${requestTrace}:${cacheNode}`)
+ *
+ * ── Step 4: Verification ──────────────────────────────────
+ *   Confirmed functional parity using local overrides and crypto hooks.
+ *
+ * ═══════════════════════════════════════════════════════════
+ * CONFIRMED CRYPTO CHAIN
+ * ═══════════════════════════════════════════════════════════
+ *  Step 1  importKey(HMAC-SHA-256, raw, base64url_decode(X-Edge-Tag))
+ *  Step 2  sign("${proxyDigest}:${requestTrace}:${cacheNode}") -> AES Key Material
+ *  Step 3  importKey(AES-GCM, raw, hmac_output_32_bytes)
+ *  Step 4  decrypt(AES-GCM, iv=X-Edge-Tag_raw[0..11], ciphertext)
  * 
  * ── ARCHITECTURE OVERVIEW ───────────────────────────────────────────────────────────────
  * A Smart Wrapper for HLS.js. Reconstructed from 'avs-loader-new-obf-jwplayer.min.js'.
@@ -36,26 +61,6 @@
     } catch (e) { return new Uint8Array(); }
   }
 
-  /**
-   * ======================================================================================
-   * DEEP DIVE: AVS v1.2.0 HYBRID DECRYPTION STRATEGY
-   * ======================================================================================
-   * 
-   * 1. THE HYBRID NATURE:
-   *    v1.2.0 was a transition period for AVS. It supports two modes:
-   *    - Legacy Binary Mode: The server returns a 100% encrypted ArrayBuffer.
-   *    - Token Mode: The server returns a M3U8 with `_t=` tokens in URLs.
-   * 
-   * 2. KEY DERIVATION (Consistent with v1.3.1):
-   *    Formula: AES_KEY = HMAC_SHA256(Key = X-Edge-Tag, Data = proxyDigest + ":" + requestTrace + ":" + cacheNode)
-   *    The decryption logic remains identical to v1.3.1, confirming that AVS 
-   *    standardized their header-based key generation early on.
-   * 
-   * 3. DATA COERCION:
-   *    The `avsDecrypt` function in this version is polymorphic. It can handle
-   *    both a joined token string and a raw ArrayBuffer as ciphertext input.
-   * ======================================================================================
-   */
   async function avsDecrypt(ciphertext, edgeTag, cacheNode, proxyDigest, requestTrace) {
     const edgeTagBytes = base64urlToBytes(edgeTag);
     const hmacKey = await crypto.subtle.importKey(
@@ -67,7 +72,6 @@
       'raw', aesKeyMaterial, { name: 'AES-GCM' }, false, ['decrypt']
     );
     const iv = edgeTagBytes.slice(0, 12);
-    
     let ciphertextBytes = (typeof ciphertext === 'string') ? base64urlToBytes(ciphertext) : new Uint8Array(ciphertext);
     const plaintextBuffer = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ciphertextBytes);
     return new TextDecoder().decode(plaintextBuffer);
