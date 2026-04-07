@@ -112,37 +112,7 @@
 
     if (isPlayerFrame) {
 
-        (function dumpAvsLoader() {
-            const _origCreate = document.createElement.bind(document);
-            document.createElement = function(tag) {
-                const el = _origCreate(tag);
-                if (tag.toLowerCase() !== 'script') return el;
-
-                const srcDesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
-                Object.defineProperty(el, 'src', {
-                    set(rawUrl) {
-                        const url = rawUrl == null ? '' : String(rawUrl);
-                        if (url && url.includes('avs-loader')) {
-                            console.log('[AVS-DUMP] Found avs-loader:', url);
-                            fetch(url, { credentials: 'include' })
-                                .then(r => r.text())
-                                .then(src => {
-                                    console.log('[AVS-DUMP] Source length:', src.length);
-                                    const stMatches = [...src.matchAll(/["']st["']/g)];
-                                    stMatches.forEach(m => {
-                                        console.log('[AVS-DUMP] st context:', src.slice(m.index - 100, m.index + 100));
-                                    });
-                                    console.log('[AVS-DUMP-FULL]', src);
-                                })
-                                .catch(e => console.error('[AVS-DUMP] Fetch failed:', e));
-                        }
-                        srcDesc.set.call(el, url);
-                    },
-                    get() { return srcDesc.get.call(el); }
-                });
-                return el;
-            };
-        })();
+        // dumpAvsLoader removed (debug-only)
 
         // ── TOAST "XEM NGAY" FIX ────────────────────────────
         // Dùng touchstart thay click để phản hồi chính xác trên mobile
@@ -167,7 +137,7 @@
                 }
             };
 
-            window.addEventListener('touchstart', handleToastAction, true);
+            window.addEventListener('touchstart', handleToastAction, { passive: false, capture: true });
             window.addEventListener('click', handleToastAction, true);
         };
 
@@ -202,10 +172,15 @@
             v.addEventListener('pause', killAd, true);
             v.addEventListener('play',  killAd, true);
         };
-        setInterval(() => {
+        // Initial run
+        document.querySelectorAll('video').forEach(hookVideo);
+        killAd();
+        // MutationObserver thay setInterval — chỉ chạy khi DOM thực sự thay đổi
+        const _adObserver = new MutationObserver(() => {
             document.querySelectorAll('video').forEach(hookVideo);
             killAd();
-        }, 300);
+        });
+        _adObserver.observe(document.documentElement, { childList: true, subtree: true });
 
         // ── CRYPTO INTERCEPT ─────────────────────────────────
         //
@@ -637,7 +612,9 @@
          '.Adv','.ad-center-header',
         ].forEach(sel => _docQSA.call(document, sel).forEach(el => el.remove()));
     };
-    setInterval(cleaner, 500);
+    cleaner();
+    // MutationObserver thay setInterval(500ms)
+    new MutationObserver(cleaner).observe(document.documentElement, { childList: true, subtree: true });
 
     let _playerIframe = null;
 
@@ -766,15 +743,17 @@
         setTimeout(tryInject, 4000);
         setTimeout(tryInject, 8000);
 
-        // Cũng watch iframe load event
-        const watchIframe = () => {
+        // MutationObserver thay setInterval(500ms) — tự disconnect sau khi tìm thấy iframe
+        const _iframeObserver = new MutationObserver(() => {
             const iframe = getPlayerIframe();
-            if (iframe && !iframe._avsWatched) {
+            if (!iframe) return;
+            _iframeObserver.disconnect();
+            if (!iframe._avsWatched) {
                 iframe._avsWatched = true;
                 iframe.addEventListener('load', () => setTimeout(tryInject, 2000));
             }
-        };
-        setInterval(watchIframe, 500);
+        });
+        _iframeObserver.observe(document.documentElement, { childList: true, subtree: true });
     })();
 
     // Nhận lệnh chuyển tập từ player frame (AVS_FORCE_NEXT)
