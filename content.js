@@ -390,7 +390,7 @@
                 const ao = location.ancestorOrigins;
                 if (ao && ao.length > 0) return new URL(ao[0]).origin;
             } catch {}
-            return 'https://animevietsub.id';
+            return 'https://animevietsub.bz';
         })();
 
         async function downloadSegments(filename) {
@@ -554,6 +554,7 @@
         #avs-shield, .avs-shield, [id*="shield"],
         .ads-container, [id*="banner"], [class*="banner"],
         [id*="catfish"], [class*="catfish"], [href*="hide_catfix"],
+        [id^="_preload-ads-"],
         div[style*="z-index: 9999"], a[style*="z-index: 99999"],
         a[target="_blank"] > img {
             display: none !important; visibility: hidden !important;
@@ -577,6 +578,7 @@
     const cleaner = () => {
         ['.ads-container','[class*="banner"]','[id*="banner"]',
          '[id*="catfish"]','[class*="catfish"]','[href*="hide_catfix"]',
+         '[id^="_preload-ads-"]',
          '.Adv','.ad-center-header',
         ].forEach(sel => _docQSA.call(document, sel).forEach(el => el.remove()));
     };
