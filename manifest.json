@@ -12,7 +12,7 @@
   ],
 
   "host_permissions": [
-    "*://*.animevietsub.id/*",
+    "*://*.animevietsub.bz/*",
     "*://*.googleapiscdn.com/*",
     "*://*.googleusercontent.com/*",
     "https://raw.githubusercontent.com/*"
@@ -33,13 +33,13 @@
   "web_accessible_resources": [{
     "resources": ["assets/logoz.png"],
     "matches": [
-      "*://*.animevietsub.id/*"
+      "*://*.animevietsub.bz/*"
     ]
   }],
 
   "content_scripts": [{
     "matches": [
-      "*://*.animevietsub.id/*",
+      "*://*.animevietsub.bz/*",
       "*://*.googleapiscdn.com/*"
     ],
     "js": ["content.js"],
