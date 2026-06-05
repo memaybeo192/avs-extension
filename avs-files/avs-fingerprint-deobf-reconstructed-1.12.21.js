@@ -6,6 +6,8 @@
  * RECONSTRUCTION & MODIFICATION NOTICE:
  * This source code is a readable reconstruction of the AVS fingerprint module recovered
  * from avs-fingerprint.min.js.
+ * This is the canonical v1.12.21 build: readable and runtime-compatible; no separate
+ * runtime-preserved duplicate is kept.
  *
  * Runtime export:
  *   window._avsProbe

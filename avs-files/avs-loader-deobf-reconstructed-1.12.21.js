@@ -8,6 +8,9 @@
  * It is written to be readable like the previous v1.3.7 reconstruction while preserving
  * the runtime surface recovered from the newer obfuscated build.
  *
+ * This is the canonical v1.12.21 build: readable enough for review and runtime-compatible
+ * enough for VM/live helper tests. A separate runtime-preserved duplicate is not needed.
+ *
  * Runtime exports:
  *   window.AvsPlaylistLoader
  *   window.AvsEncryptedLoader

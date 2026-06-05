@@ -2,23 +2,17 @@
 
 Generated: 2026-06-05
 
-## Main readable files
+## Canonical readable/runtime-compatible files
 
 - avs-loader-deobf-reconstructed-1.12.21.js
-  - Readable reconstruction in the same spirit as v1.3.7.
+  - Single canonical loader reference: readable in the same spirit as v1.3.7 and runtime-compatible for VM/live helper tests.
   - Updated with v1.12.21 envelope parser, service-worker message types, playlist decrypt flow,
     placeholder segment handling, and diagnostics.
 
 - avs-fingerprint-deobf-reconstructed-1.12.21.js
-  - Readable reconstruction of the new fingerprint companion module.
+  - Single canonical fingerprint companion: readable and runtime-compatible.
 
-## Runtime-preserved backup files
-
-- avs-loader-deobf-runtime-preserved-1.12.21.js
-  - Body preserved from webcrack output for live-site fallback testing.
-
-- avs-fingerprint-deobf-runtime-preserved-1.12.21.js
-  - Body preserved from webcrack output for live-site fallback testing.
+Runtime-preserved duplicates were removed after the reconstructed files were confirmed to expose the same public helper surface. Keep future v1.12.21+ outputs in this one-file-per-module style unless a raw runtime copy is temporarily needed during active deobf.
 
 ## Changelog vs v1.3.7
 
@@ -42,11 +36,10 @@ Generated: 2026-06-05
 
 ## Verification
 
-- node --check passed for all four v1.12.21 files.
+- node --check passed for both canonical v1.12.21 files.
 - VM smoke test passed:
-  - reconstructed/runtime-preserved loaders expose AvsPlaylistLoader, AvsEncryptedLoader,
-    _avsDecryptM3u8, and _avsG6Diag.
-  - reconstructed/runtime-preserved fingerprints expose _avsProbe.
+  - canonical loader exposes AvsPlaylistLoader, AvsEncryptedLoader, _avsDecryptM3u8, and _avsG6Diag.
+  - canonical fingerprint exposes _avsProbe.
 - Extension live test on Chrome, 2026-06-05:
   - Same AnimeVietSub player initially exposed an incomplete plaintext cache with 1 direct URL.
   - Adaptive resolver ignored that incomplete cache, used the native text+headers path, and resolved 233 segments.
