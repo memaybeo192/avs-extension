@@ -1,0 +1,10 @@
+_metadata/
+AVS_CLEANER_MAINTAINER_PROMPT.md
+AVS_DEOBF_GUIDE.md
+*.ts
+*.mp4
+*.zip
+*.tmp
+*.temp
+__pycache__/
+*.pyc

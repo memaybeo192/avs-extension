@@ -5,22 +5,56 @@
  * 
  * ⚠️ RECONSTRUCTION & MODIFICATION NOTICE:
  * This source code is a DE-OBFUSCATED version of the original AVS security module.
- * NOTE: The original minified code works perfectly. Modifications were only applied 
- * to RESTORE functional stability (specifically the 'stats' object) after de-obfuscation.
+ * 
+ * NOTE: The original minified/obfuscated code works perfectly in its native environment. 
+ * However, manual de-obfuscation often breaks implicit dependencies and internal 
+ * HLS.js state handling. These modifications were applied to RESTORE functional 
+ * stability to the de-obfuscated logic, specifically by explicitly defining 
+ * objects (like stats.parsing) that were handled implicitly in the original context.
  * 
  * ═══════════════════════════════════════════════════════════
- * DEOBFUSCATION METHODOLOGY (v1.3.1)
+ * DEOBFUSCATION METHODOLOGY (v1.3.1 Trace)
  * ═══════════════════════════════════════════════════════════
- * 1. Control Flow Unflattening: Mapped the switch-case dispatcher using trace sequence.
- * 2. Header Extraction: Identified X-Edge-Tag, X-Cache-Node, X-Proxy-Digest.
- * 3. Crypto Chain: Confirmed HMAC-SHA256 signature for AES-GCM key derivation.
- *    AES_KEY = HMAC(X-Edge-Tag, `${proxyDigest}:${requestTrace}:${cacheNode}`)
- * 4. IV Recovery: First 12 bytes of decoded X-Edge-Tag.
+ *
+ * Obfuscator: javascript-obfuscator (High Compression)
+ * 
+ * ── Step 1: Identify the string decoder ───────────────────
+ *   Located the internal string lookup function. It uses a base offset to index 
+ *   into the rotated string array. Multi-part symbols (e.g. "AES-"+"GCM") 
+ *   were concatenated inline.
+ *
+ * ── Step 2: Control Flow Unflattening ─────────────────────
+ *   Logic was hidden inside a massive switch-case state machine.
+ *   By tracing the sequence string (e.g., "1|4|0|3|2"), we mapped the 
+ *   disjointed switch cases back into a linear logical flow.
+ *
+ * ── Step 3: Identify Security Headers ─────────────────────
+ *   Discovered the usage of X-Edge-Tag, X-Cache-Node, X-Proxy-Digest, and 
+ *   X-Request-Trace. These are retrieved from the XHR response headers.
+ *
+ * ── Step 4: Reconstruct Crypto Chain ──────────────────────
+ *   Confirmed HMAC-SHA256 signature order for AES key derivation:
+ *   AES_KEY = HMAC(Key: X-Edge-Tag, Data: `${proxyDigest}:${requestTrace}:${cacheNode}`)
+ *
+ * ── Step 5: Interleaving Strategy ─────────────────────────
+ *   Discovered that the decrypted plaintext is a list of clean URLs. 
+ *   The module reconstructed the M3U8 by interleaving these URLs with 
+ *   the original #EXTINF tags.
+ *
+ * ═══════════════════════════════════════════════════════════
+ * CONFIRMED CRYPTO CHAIN
+ * ═══════════════════════════════════════════════════════════
+ *  Step 1  importKey(HMAC-SHA-256, raw, base64url_decode(X-Edge-Tag))
+ *  Step 2  sign("${proxyDigest}:${requestTrace}:${cacheNode}") -> AES Key Material
+ *  Step 3  importKey(AES-GCM, raw, hmac_output_32_bytes)
+ *  Step 4  decrypt(AES-GCM, iv=X-Edge-Tag_raw[0..11], ciphertext)
  * ═══════════════════════════════════════════════════════════
  */
 
 (function (window) {
   'use strict';
+
+  const isSupported = !!(window.crypto && window.crypto.subtle);
 
   function base64urlToBytes(str) {
     try {

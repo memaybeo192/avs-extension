@@ -1,0 +1,1271 @@
+/**
+ * AVS Player Initialization Module
+ * Fully Deobfuscated, Structuralized & Verified via AST Analysis
+ * Made By Lam
+ * Deobf - reconstructed from init.min.js (Version 1.3.1)
+ *
+ * ═══════════════════════════════════════════════════════════
+ * DEOBFUSCATION METHODOLOGY
+ * ═══════════════════════════════════════════════════════════
+ *
+ * Obfuscator: javascript-obfuscator (Advanced Profile, No Custom VM)
+ * Techniques used:
+ * 1. String array & Hexadecimal Encoding — literals hoisted and hex-encoded
+ * 2. Identifier Renaming (Minification) — variables stripped to short/hex names
+ * 3. Control Flow Flattening (Objects) — operators/functions wrapped in object properties
+ * 4. Control Flow Flattening (Switch-Case) — linear execution fragmented into while-switch state machines
+ * 5. Opaque Predicates & Dead Code — dummy conditions injected to hide actual logic
+ *
+ * ── Step 1: String Array & Hex Resolution ──────────────────
+ *
+ * Original script hoisted all semantic strings (e.g., "height", "width", "/playlist/")
+ * into a massive global array. A rotating decoder function retrieved them using
+ * hex parameters (e.g., _0xabc(0x12a)).
+ * * AST Pass: Evaluated the decoder function statically, mapped all CallExpressions
+ * targeting it, and replaced them inline with pure StringLiterals.
+ *
+ * ── Step 2: CFF Object Inlining (Unwrapping) ───────────────
+ *
+ * Operators and native functions were grouped into massive Object Literals.
+ * Example original structure:
+ * var _0xObj = {
+ * "QzFBv": function(a, b) { return a !== b; },
+ * "FYgNs": function(a, b) { return a / b; },
+ * "rwOYh": "XXeXN"
+ * };
+ * Code like `_0xObj.FYgNs(_0xObj.QzFBv(a, b), 60)` was unwrapped by AST back
+ * to standard BinaryExpressions: `(a !== b) / 60`.
+ *
+ * ── Step 3: Dead Code Elimination (DCE) ────────────────────
+ *
+ * The obfuscator injected thousands of lines of junk code wrapped in
+ * Opaque Predicates (conditions that evaluate predictably but look complex).
+ * Example: `if (_0xObj.rwOYh === _0xObj.rwOYh)` translates to `"XXeXN" === "XXeXN"`.
+ * * AST Pass: Statically evaluated all IfStatements. Branches resolving to `false` 
+ * were entirely pruned. Branches resolving to `true` were unwrapped, isolating
+ * the genuine player logic.
+ *
+ * ── Step 4: Structural Unflattening & Scope Cleanup ────────
+ *
+ * Execution flows were broken into arrays like `var seq = "5|1|4|3|0|2".split("|")`
+ * driving a `switch` block inside a `while(true)` loop.
+ * * AST Pass: Sequentially mapped the switch cases based on the array order to 
+ * rebuild standard linear statement blocks. Obfuscated variables (e.g., `_0x4b5fed`) 
+ * were safely renamed to sequential identifiers (`v1`, `v2`, etc.) to prevent 
+ * scope collisions, then manually renamed to semantic identities (e.g., `setupConfig`, `bannerData`).
+ *
+ * ═══════════════════════════════════════════════════════════
+ * CONFIRMED PLAYER ARCHITECTURE & LOGIC CHAIN
+ * ═══════════════════════════════════════════════════════════
+ *
+ * JWPlayer Initialization (`initPlayer`):
+ * - Core setup injects `playlistUrl` (appends `?token=` and `&plain=1` if Safari).
+ * - Dynamically hooks HLS.js custom loaders (`AvsPlaylistLoader`, `AvsEncryptedLoader`) 
+ * into JWPlayer config for on-the-fly M3U8 decryption.
+ *
+ * Ad Network Integration:
+ * - Base64 decodes initial VAST/Banner config from a global `adsConfig` variable.
+ * - Fallback: Fetches `/admin/api/ads/active` via fetch API or `$.getJSON`.
+ * - Custom overlays (Banner & Pause Ad) are injected into the DOM (`.jw-wrapper`) 
+ * and triggered via JWPlayer event listeners (`time`, `pause`, `play`).
+ * - Calculates ad insertion points dynamically based on video duration (`availDur / maxShows`).
+ *
+ * Security & Network Interception (XHR Monkey-Patching):
+ * - Overrides `XMLHttpRequest.prototype.send` and `open`.
+ * - 429 Too Many Requests: Intercepts rate limits, reads `Retry-After` header, 
+ * pauses player, and displays a custom countdown overlay (`avs-status-count`).
+ * - 403 Forbidden: Detects "Session expired", "Forbidden", or "Bot detected" responses 
+ * during segment/playlist fetching. Captures current video position, saves to 
+ * `sessionStorage`, and forces `window.location.reload()` to renew session tokens.
+ *
+ * User Experience Hooks:
+ * - Resume Position: Saves `player.getPosition()` to `localStorage` every 5s. 
+ * Displays prompt on next load.
+ * - Next Episode: Checks `player.getDuration() - player.getPosition() < 120`. 
+ * Displays toast overlay (`avs-next-toast`) to redirect to `nextUrl`.
+ * - Custom Buttons: Injects "Skip OP/ED" (+90s), "Tua tiếp 5s", "Tua lại 5s".
+ *
+ * ═══════════════════════════════════════════════════════════
+ *
+ * Dependencies (Expected in global scope):
+ * jwplayer, $, avsToken, id, nextUrl, nextName, schedule, isFinal, adsConfig
+ */
+var AVS_VERSION = "1.3.1";
+
+// --- Polyfills ---
+
+if (!String.prototype.padStart) {
+  String.prototype.padStart = function (targetLength, padString) {
+    var str = String(this);
+    padString = String(void 0 !== padString ? padString : " ");
+    if (str.length >= targetLength) return str;
+    var pad = "";
+    while (pad.length < targetLength - str.length) {
+      pad += padString;
+    }
+    return pad.slice(0, targetLength - str.length) + str;
+  };
+}
+
+if (!Element.prototype.closest) {
+  Element.prototype.closest = function (selector) {
+    var el = this;
+    while (el && 1 === el.nodeType) {
+      if (el.matches ? el.matches(selector) : el.msMatchesSelector && el.msMatchesSelector(selector)) {
+        return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  };
+}
+
+// --- Global Utilities & State ---
+
+var showError = function (msg) {
+  $("body").html(
+    '<div style="color:#fff;text-align:center;padding:40px;font-family:Arial">' +
+      msg +
+      "</div>",
+  );
+};
+
+var isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+var isServiceWorkerSupported = "serviceWorker" in navigator;
+
+// Check if we need to use plain HLS (no decryption)
+var needsPlainHls = (isSafari && !isServiceWorkerSupported) || (void 0 !== window._avsCryptoSupported && !window._avsCryptoSupported);
+
+var tokenQueryParam = avsToken ? "?token=" + encodeURIComponent(avsToken) : "";
+var plainQueryParam = needsPlainHls ? (tokenQueryParam ? "&plain=1" : "?plain=1") : "";
+var playlistUrl = "/playlist/" + id + "/playlist.m3u8" + tokenQueryParam + plainQueryParam;
+
+var RESUME_KEY = "resumevideodata" + id;
+var lastSaveTime = 0;
+
+var resumeData = (function () {
+  var data = null;
+  try {
+    data = localStorage.getItem(RESUME_KEY);
+  } catch (e) {}
+  console.log("[AVS resume] key:", RESUME_KEY, "| localStorage value:", data);
+  return data;
+})();
+
+// --- Player Feature Modules ---
+
+var saveResumePosition = function (player) {
+  var now = Date.now();
+  if (now - lastSaveTime < 5000) return;
+  
+  lastSaveTime = now;
+  var pos = Math.floor(player.getPosition());
+  var dur = Math.floor(player.getDuration());
+  
+  if (pos > 0 && dur > 0 && isFinite(dur)) {
+    try {
+      localStorage.setItem(RESUME_KEY, pos + ":" + dur);
+    } catch (e) {}
+    console.log("[AVS resume] saved:", pos, "/", dur);
+  }
+};
+
+var checkResume = function (player) {
+  console.log("[AVS resume] checkResume called, data:", resumeData);
+  if (!resumeData) return;
+
+  var parts = resumeData.split(":");
+  var resumePos = parseInt(parts[0]);
+  var totalDur = parseInt(parts[1]);
+
+  if (isNaN(resumePos) || isNaN(totalDur) || resumePos <= 0 || resumePos >= totalDur) return;
+
+  var timeStr = [
+    Math.floor(resumePos / 3600),
+    Math.floor((resumePos % 3600) / 60),
+    resumePos % 60,
+  ].map(function (val) {
+    return val.toString().padStart(2, "0");
+  }).join(":");
+
+  var overlay = document.createElement("div");
+  overlay.id = "avs-resume-overlay";
+  overlay.innerHTML =
+    '<div id="avs-resume-box">' +
+      '<div class="avs-icon">▶</div>' +
+      '<div class="avs-title">Hệ thống ghi nhận bạn đã từng xem anime này trước đó!<br/>Bạn có muốn xem tiếp từ đoạn:</div>' +
+      '<div class="avs-time">' + timeStr + '</div>' +
+      '<div class="avs-btns">' +
+        '<button id="avs-resume-btn-yes">Xem tiếp</button>' +
+        '<button id="avs-resume-btn-no">Từ đầu</button>' +
+      '</div>' +
+    '</div>';
+
+  var wrapper = document.querySelector(".jw-wrapper") || document.body;
+  wrapper.appendChild(overlay);
+
+  var closeOverlay = function () {
+    if (overlay.parentNode) {
+      overlay.parentNode.removeChild(overlay);
+    }
+  };
+
+  document.getElementById("avs-resume-btn-yes").onclick = function () {
+    player.seek(resumePos);
+    closeOverlay();
+  };
+
+  document.getElementById("avs-resume-btn-no").onclick = function () {
+    try {
+      localStorage.removeItem(RESUME_KEY);
+    } catch (e) {}
+    closeOverlay();
+  };
+};
+
+var nextToastShown = false;
+var checkNextEpisode = function (player) {
+  if (nextToastShown) return;
+  if (!(nextName || schedule || "1" === isFinal)) return;
+
+  var dur = player.getDuration();
+  var pos = player.getPosition();
+
+  if (!dur || !isFinite(dur) || dur <= 30 || dur - pos > 120) return;
+
+  nextToastShown = true;
+  var icon, title, content;
+  var toast = document.createElement("div");
+  toast.id = "avs-next-toast";
+
+  if (nextName && nextUrl) {
+    icon = "📺";
+    title = "Tập tiếp theo";
+    content = '<div class="avs-toast-name">Tập ' + nextName + '</div><button class="avs-toast-btn" id="avs-next-btn">Xem ngay</button>';
+  } else if ("1" === isFinal) {
+    icon = "🎉";
+    title = "Đã hết phim!";
+    content = "Chúc các bạn bạn xem phim vui vẻ ^^";
+  } else if (schedule) {
+    icon = "📅";
+    title = "Tập tiếp theo";
+    content = '<div class="avs-toast-name">' + schedule + "</div>";
+  } else {
+    return;
+  }
+
+  toast.innerHTML =
+    '<div class="avs-toast-header">' +
+      '<span class="avs-toast-icon">' + icon + '</span>' +
+      '<span class="avs-toast-title">' + title + '</span>' +
+      '<button class="avs-toast-close" id="avs-next-close">✕</button>' +
+    '</div>' + content;
+
+  var wrapper = document.querySelector(".jw-wrapper") || document.body;
+  wrapper.appendChild(toast);
+
+  var nextBtn = document.getElementById("avs-next-btn");
+  if (nextBtn) {
+    nextBtn.onclick = function () {
+      window.top.location.href = nextUrl;
+    };
+  }
+
+  document.getElementById("avs-next-close").onclick = function () {
+    if (toast.parentNode) {
+      toast.parentNode.removeChild(toast);
+    }
+  };
+};
+
+// --- Ad Overlays ---
+
+var initBannerOverlay = function (player, config) {
+  if (!config || !config.image) return;
+
+  var maxShows = (typeof config.maxShows === "number" && config.maxShows > 0) ? config.maxShows : 4;
+  var isBannerShown = false;
+  var isBannerClosed = false;
+  var adPlaying = false;
+  var bannerData = null;
+  var replayDetected = false;
+  var delay = (typeof config.delay === "number") ? config.delay : 5;
+  var duration = (typeof config.duration === "number") ? config.duration : 0;
+
+  var showBanner = function () {
+    var overlay = (function () {
+      var existing = document.getElementById("avs-banner-overlay");
+      if (existing) return existing;
+      
+      var wrapper = document.querySelector(".jw-wrapper");
+      if (!wrapper) return null;
+
+      wrapper.style.overflow = "visible";
+      var el = document.createElement("div");
+      el.id = "avs-banner-overlay";
+      el.style.display = "none";
+      el.innerHTML =
+        (config.link
+          ? '<a href="' + config.link + '" target="_blank" rel="noopener" class="avs-banner-img-link"><img src="' + config.image + '" class="avs-banner-img" alt="Advertisement"></a>'
+          : '<img src="' + config.image + '" class="avs-banner-img" alt="Advertisement">') +
+        '<button class="avs-banner-close" aria-label="Close ad">✕</button>';
+      
+      wrapper.appendChild(el);
+      el.querySelector(".avs-banner-close").onclick = function () {
+        isBannerClosed = true;
+        hideBanner();
+      };
+      return el;
+    })();
+
+    if (overlay) {
+      overlay.style.display = "";
+      isBannerShown = true;
+      isBannerClosed = false;
+      if (duration > 0) {
+        setTimeout(function () {
+          if (isBannerShown && !isBannerClosed) {
+            overlay.style.display = "none";
+            isBannerShown = false;
+          }
+        }, 1000 * duration);
+      }
+    }
+  };
+
+  var hideBanner = function () {
+    var overlay = document.getElementById("avs-banner-overlay");
+    if (overlay) {
+      overlay.style.display = "none";
+    }
+    isBannerShown = false;
+  };
+
+  var tooltip = null;
+  var isTooltipInit = false;
+  var isCuesInit = false;
+
+  var initTooltipEvents = function () {
+    if (isTooltipInit) return;
+    var timeSlider = document.querySelector(".jw-slider-time");
+    if (!timeSlider) return;
+
+    isTooltipInit = true;
+    timeSlider.addEventListener("mouseover", function (e) {
+      if (!isCuesInit) return;
+      var cueEl = e.target.closest(".jw-cue-type-ads, .jw-cue");
+      if (!cueEl) return;
+
+      var tip = (function (el) {
+        var t = (tooltip && tooltip.parentNode) ? tooltip : document.createElement("div");
+        if (!tooltip || !tooltip.parentNode) {
+          t.className = "avs-cue-tooltip";
+          t.textContent = "Quảng cáo";
+          document.body.appendChild(t);
+          tooltip = t;
+        }
+        t.style.left = "-9999px";
+        t.style.top = "-9999px";
+        t.classList.add("avs-cue-tooltip-visible");
+
+        var rect = el.getBoundingClientRect();
+        t.style.left = Math.round(rect.left + rect.width / 2 - t.offsetWidth / 2) + "px";
+        t.style.top = Math.round(rect.top - t.offsetHeight - 6) + "px";
+        return t;
+      })(cueEl);
+    });
+
+    timeSlider.addEventListener("mouseout", function (e) {
+      if (e.target.closest(".jw-cue-type-ads, .jw-cue") && tooltip) {
+        tooltip.classList.remove("avs-cue-tooltip-visible");
+      }
+    });
+  };
+
+  var updateCues = function (checkpoints) {
+    try {
+      player.setCues(checkpoints.map(function (cp) {
+        return { begin: cp.time };
+      }));
+    } catch (e) {}
+    isCuesInit = true;
+    setTimeout(initTooltipEvents, 500);
+  };
+
+  player.on("time", function (timeData) {
+    if (!bannerData) {
+      var dur = timeData.duration || player.getDuration();
+      if (!dur || !isFinite(dur) || dur <= 0) return;
+
+      bannerData = (function (totalDur) {
+        var availDur = totalDur - delay;
+        if (availDur <= 0) availDur = totalDur;
+        var interval = availDur / maxShows;
+        var points = [];
+        for (var i = 0; i < maxShows; i++) {
+          points.push({ time: delay + interval * i, shown: false });
+        }
+        return points;
+      })(dur);
+      updateCues(bannerData);
+    }
+
+    if (!adPlaying) {
+      var pos = timeData.position;
+      for (var i = 0; i < bannerData.length; i++) {
+        var cp = bannerData[i];
+        if (!cp.shown && pos >= cp.time) {
+          cp.shown = true;
+          isBannerClosed = false;
+          showBanner();
+          break;
+        }
+      }
+    }
+  });
+
+  player.on("complete", function () {
+    replayDetected = true;
+    hideBanner();
+  });
+
+  player.on("play", function () {
+    if (replayDetected) {
+      if (bannerData) {
+        for (var i = 0; i < bannerData.length; i++) {
+          bannerData[i].shown = false;
+        }
+        isBannerClosed = false;
+        replayDetected = false;
+        hideBanner();
+        updateCues(bannerData);
+      }
+    }
+  });
+
+  player.on("adPlay", function () {
+    adPlaying = true;
+    hideBanner();
+  });
+
+  var resetAdFlag = function () {
+    adPlaying = false;
+  };
+  player.on("adSkipped", resetAdFlag);
+  player.on("adComplete", resetAdFlag);
+  player.on("adError", resetAdFlag);
+};
+
+var initPauseAdOverlay = function (player, config) {
+  if (!config || !config.image) return;
+
+  var adEl = null;
+  var adPlaying = false;
+
+  var showPauseAd = function () {
+    if (adPlaying) return;
+    var overlay = (function () {
+      if (adEl && adEl.parentNode) return adEl;
+      var wrapper = document.querySelector(".jw-wrapper");
+      if (!wrapper) return null;
+
+      var el = document.createElement("div");
+      el.id = "avs-pause-ad";
+      el.style.display = "none";
+      el.innerHTML =
+        '<div class="avs-pause-ad-box">' +
+          (config.link
+            ? '<a href="' + config.link + '" target="_blank" rel="noopener" class="avs-pause-ad-link"><img src="' + config.image + '" class="avs-pause-ad-img" alt="Advertisement"></a>'
+            : '<img src="' + config.image + '" class="avs-pause-ad-img" alt="Advertisement">') +
+          '<div class="avs-pause-ad-label">Quảng cáo</div>' +
+          '<button class="avs-pause-ad-close" aria-label="Close ad">✕</button>' +
+        '</div>';
+      
+      wrapper.appendChild(el);
+      el.querySelector(".avs-pause-ad-close").onclick = function () {
+        hidePauseAd();
+        player.play();
+      };
+      adEl = el;
+      return el;
+    })();
+
+    if (overlay) overlay.style.display = "";
+  };
+
+  var hidePauseAd = function () {
+    if (adEl) adEl.style.display = "none";
+  };
+
+  player.on("pause", showPauseAd);
+  player.on("idle", showPauseAd);
+  player.on("play", hidePauseAd);
+  
+  player.on("adPlay", function () {
+    adPlaying = true;
+    hidePauseAd();
+  });
+
+  var resetAdFlag = function () {
+    adPlaying = false;
+  };
+  player.on("adSkipped", resetAdFlag);
+  player.on("adComplete", resetAdFlag);
+  player.on("adError", resetAdFlag);
+};
+
+// --- Core Player Initialization ---
+
+var initPlayer = function () {
+  var player = jwplayer("player");
+  var setupConfig = {
+    height: "100%",
+    width: "100%",
+    sources: [{ file: playlistUrl, type: "hls" }],
+    key: "W7zSm81+mmIsg7F+fyHRKhF3ggLkTqtGMhvI92kbqf/ysE99",
+    mute: false,
+    allowfullscreen: true,
+    playbackRateControls: [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2],
+    preload: "auto",
+    primary: "html5",
+    image: "https://lh6.googleusercontent.com/DKOFK047OChE35TAROUux9747riGULvvKG4In3skBqZkMoa3VI4FJ81wEQkOLVPkp7GgbDykG6tlSw45h46awqVeWJ1WG1laAb-Bo0k2Ht1f6szHKoyK3btYYnk=s0",
+    aboutlink: "https://linktr.ee/animevietsub",
+    abouttext: "Thông tin về AnimeVietsub",
+    cast: {},
+    captions: {
+      color: "#ffffff",
+      fontSize: 20,
+      backgroundOpacity: 0,
+      fontfamily: "Arial",
+      edgeStyle: "raised",
+    },
+    skin: {
+      name: "animevsub",
+      url: "/static/skin/skinavs.css?v=" + AVS_VERSION,
+    },
+  };
+
+  // HLS.js configuration for decryption support
+  var hlsjsConfig = {
+    pLoader: AvsPlaylistLoader,
+    fLoader: AvsEncryptedLoader,
+  };
+
+  if (!isSafari && window._avsCryptoSupported !== false) {
+    setupConfig.hlsjsConfig = hlsjsConfig;
+  }
+
+  var bannerConfig = null;
+  var pauseAdConfig = null;
+
+  // Initial ads configuration from global variable
+  if (typeof adsConfig === "string" && adsConfig.length > 0) {
+    try {
+      var adsData = JSON.parse(atob(adsConfig));
+      console.log("[AVS ads] decoded config:", adsData);
+      
+      if (adsData && adsData.client && adsData.schedule) {
+        setupConfig.advertising = { client: adsData.client, schedule: adsData.schedule };
+      }
+      if (adsData && adsData.banner && adsData.banner.image) {
+        bannerConfig = adsData.banner;
+        console.log("[AVS banner] config:", bannerConfig);
+      }
+      if (adsData && adsData.pauseAd && adsData.pauseAd.image) {
+        pauseAdConfig = adsData.pauseAd;
+        console.log("[AVS pauseAd] config:", pauseAdConfig);
+      }
+    } catch (e) {
+      console.error("[AVS ads] Failed to parse ads config:", e, "raw:", adsConfig);
+    }
+  }
+
+  var applyAdsConfig = function (data) {
+    if (!data || typeof data !== "object") return;
+
+    if (data.client && data.schedule && Array.isArray(data.schedule) && data.schedule.length > 0) {
+      setupConfig.advertising = { client: data.client, schedule: data.schedule };
+      console.log("[AVS ads] VAST config applied to setup");
+    } else if (data.client || data.schedule) {
+      console.warn("[AVS ads] incomplete VAST config (need both client + non-empty schedule), skipping VAST");
+    }
+
+    if (data.banner && typeof data.banner === "object" && data.banner.image) {
+      bannerConfig = data.banner;
+      console.log("[AVS banner] config from API:", bannerConfig);
+    }
+
+    if (data.pauseAd && typeof data.pauseAd === "object" && data.pauseAd.image) {
+      pauseAdConfig = data.pauseAd;
+      console.log("[AVS pauseAd] config from API:", pauseAdConfig);
+    }
+  };
+
+  // Determine if we need to fetch ads config from API
+  var adsPromise = (typeof Promise !== "undefined") ? Promise.resolve() : { then: function (cb) { cb(); return this; } };
+
+  if (!setupConfig.advertising && !bannerConfig && !pauseAdConfig) {
+    if (typeof fetch === "function" && typeof Promise !== "undefined") {
+      adsPromise = fetch("/admin/api/ads/active", { credentials: "same-origin" })
+        .then(function (res) {
+          return res.ok ? res.json().catch(function () { console.warn("[AVS ads] invalid JSON response"); return {}; }) : (console.warn("[AVS ads] API returned", res.status), {});
+        })
+        .then(function (data) {
+          if (data && Object.keys(data).length > 0) {
+            console.log("[AVS ads] fetched from API:", data);
+            applyAdsConfig(data);
+          }
+        })
+        .catch(function (e) {
+          console.warn("[AVS ads] API fetch failed (non-blocking):", e);
+        });
+    } else {
+      adsPromise = {
+        then: function (cb) {
+          $.getJSON("/admin/api/ads/active")
+            .done(function (data) { if (data && typeof data === "object") applyAdsConfig(data); cb(); })
+            .fail(function () { cb(); });
+          return this;
+        }
+      };
+    }
+  }
+
+  adsPromise.then(function () {
+    player.setup(setupConfig);
+
+    // Initial cue setup for VAST ads
+    if (setupConfig.advertising && setupConfig.advertising.schedule) {
+      player.on("ready", function () {
+        try {
+          var cues = (player.getCues() || []).map(function (c) {
+            return { begin: c.begin, cueType: c.cueType || "ads" };
+          });
+          player.setCues(cues);
+        } catch (e) {}
+      });
+    }
+
+    // Initialize Overlays (Banner & Pause Ad)
+    if (bannerConfig) {
+      // Inline duplicate logic for banner overlay from minified source
+      var maxShows = (typeof bannerConfig.maxShows === "number" && bannerConfig.maxShows > 0) ? bannerConfig.maxShows : 4;
+      var count = 0;
+      var isBannerShown = false;
+      var isBannerClosed = false;
+      var adPlaying = false;
+      var bannerData = null;
+      var replayDetected = false;
+      var delay = (typeof bannerConfig.delay === "number") ? bannerConfig.delay : 5;
+      var duration = (typeof bannerConfig.duration === "number") ? bannerConfig.duration : 0;
+
+      var showBanner = function () {
+        var overlay = (function () {
+          var existing = document.getElementById("avs-banner-overlay");
+          if (existing) return existing;
+          var wrapper = document.querySelector(".jw-wrapper");
+          if (!wrapper) return null;
+          wrapper.style.overflow = "visible";
+          var el = document.createElement("div");
+          el.id = "avs-banner-overlay";
+          el.style.display = "none";
+          el.innerHTML =
+            (bannerConfig.link
+              ? '<a href="' + bannerConfig.link + '" target="_blank" rel="noopener" class="avs-banner-img-link"><img src="' + bannerConfig.image + '" class="avs-banner-img" alt="Advertisement"></a>'
+              : '<img src="' + bannerConfig.image + '" class="avs-banner-img" alt="Advertisement">') +
+            '<button class="avs-banner-close" aria-label="Close ad">✕</button>';
+          wrapper.appendChild(el);
+          el.querySelector(".avs-banner-close").onclick = function () {
+            isBannerClosed = true;
+            hideBanner();
+          };
+          return el;
+        })();
+        if (overlay) {
+          overlay.style.display = "";
+          isBannerShown = true;
+          isBannerClosed = false;
+          if (duration > 0) {
+            setTimeout(function () {
+              if (isBannerShown && !isBannerClosed) { overlay.style.display = "none"; isBannerShown = false; }
+            }, 1000 * duration);
+          }
+        }
+      };
+
+      var hideBanner = function () {
+        var overlay = document.getElementById("avs-banner-overlay");
+        if (overlay) overlay.style.display = "none";
+        isBannerShown = false;
+      };
+
+      var tooltip = null;
+      var isTooltipInit = false;
+      var isCuesInit = false;
+
+      var initTooltipEvents = function () {
+        if (isTooltipInit) return;
+        var timeSlider = document.querySelector(".jw-slider-time");
+        if (!timeSlider) return;
+        isTooltipInit = true;
+        timeSlider.addEventListener("mouseover", function (e) {
+          if (!isCuesInit) return;
+          var cueEl = e.target.closest(".jw-cue-type-ads, .jw-cue");
+          if (!cueEl) return;
+          var tip = (function (el) {
+            var t = (tooltip && tooltip.parentNode) ? tooltip : document.createElement("div");
+            if (!tooltip || !tooltip.parentNode) {
+              t.className = "avs-cue-tooltip";
+              t.textContent = "Quảng cáo";
+              document.body.appendChild(t);
+              tooltip = t;
+            }
+            t.style.left = "-9999px"; t.style.top = "-9999px";
+            t.classList.add("avs-cue-tooltip-visible");
+            var rect = el.getBoundingClientRect();
+            var rectHeight = t.offsetHeight;
+            t.style.left = Math.round(rect.left + rect.width / 2 - t.offsetWidth / 2) + "px";
+            t.style.top = Math.round(rect.top - rectHeight - 6) + "px";
+            return t;
+          })(cueEl);
+        });
+        timeSlider.addEventListener("mouseout", function (e) {
+          if (e.target.closest(".jw-cue-type-ads, .jw-cue") && tooltip) {
+            tooltip.classList.remove("avs-cue-tooltip-visible");
+          }
+        });
+      };
+
+      var updateCues = function (checkpoints) {
+        try { player.setCues(checkpoints.map(function (cp) { return { begin: cp.time }; })); } catch (e) {}
+        isCuesInit = true;
+        setTimeout(initTooltipEvents, 500);
+      };
+
+      player.on("time", function (timeData) {
+        if (!bannerData) {
+          var dur = timeData.duration || player.getDuration();
+          if (!dur || !isFinite(dur) || dur <= 0) return;
+          bannerData = (function (totalDur) {
+            var availDur = totalDur - delay;
+            if (availDur <= 0) availDur = totalDur;
+            var interval = availDur / maxShows;
+            var points = [];
+            for (var i = 0; i < maxShows; i++) {
+              points.push({ time: delay + interval * i, shown: false });
+            }
+            return points;
+          })(dur);
+          updateCues(bannerData);
+          console.log("[AVS banner] checkpoints:", bannerData.map(function (cp) { return Math.round(cp.time); }), "dur:", Math.round(dur));
+        }
+        if (!adPlaying) {
+          var pos = timeData.position;
+          for (var i = 0; i < bannerData.length; i++) {
+            var cp = bannerData[i];
+            if (!cp.shown && pos >= cp.time) {
+              cp.shown = true;
+              isBannerClosed = false;
+              count++;
+              console.log("[AVS banner] show #" + count + " at " + Math.round(pos) + "s");
+              showBanner();
+              break;
+            }
+          }
+        }
+      });
+
+      player.on("complete", function () { replayDetected = true; hideBanner(); });
+      player.on("play", function () {
+        if (replayDetected) {
+          if (bannerData) {
+            for (var i = 0; i < bannerData.length; i++) bannerData[i].shown = false;
+            count = 0; isBannerClosed = false; replayDetected = false; hideBanner(); updateCues(bannerData);
+          }
+          console.log("[AVS banner] replay detected, checkpoints reset");
+        }
+      });
+      player.on("adPlay", function () { adPlaying = true; hideBanner(); });
+      var resetAdFlag = function () { adPlaying = false; };
+      player.on("adSkipped", resetAdFlag);
+      player.on("adComplete", resetAdFlag);
+      player.on("adError", resetAdFlag);
+    }
+
+    if (pauseAdConfig) {
+      var adEl = null;
+      var adPlaying = false;
+      var showPauseAd = function () {
+        if (adPlaying) return;
+        var overlay = (function () {
+          if (adEl && adEl.parentNode) return adEl;
+          var wrapper = document.querySelector(".jw-wrapper");
+          if (!wrapper) return null;
+          var el = document.createElement("div");
+          el.id = "avs-pause-ad";
+          el.style.display = "none";
+          el.innerHTML =
+            '<div class="avs-pause-ad-box">' +
+              (pauseAdConfig.link
+                ? '<a href="' + pauseAdConfig.link + '" target="_blank" rel="noopener" class="avs-pause-ad-link"><img src="' + pauseAdConfig.image + '" class="avs-pause-ad-img" alt="Advertisement"></a>'
+                : '<img src="' + pauseAdConfig.image + '" class="avs-pause-ad-img" alt="Advertisement">') +
+              '<div class="avs-pause-ad-label">Quảng cáo</div>' +
+              '<button class="avs-pause-ad-close" aria-label="Close ad">✕</button>' +
+            '</div>';
+          wrapper.appendChild(el);
+          el.querySelector(".avs-pause-ad-close").onclick = function () { hidePauseAd(); player.play(); };
+          adEl = el;
+          return el;
+        })();
+        if (overlay) overlay.style.display = "";
+      };
+      var hidePauseAd = function () { if (adEl) adEl.style.display = "none"; };
+      player.on("pause", showPauseAd);
+      player.on("idle", showPauseAd);
+      player.on("play", hidePauseAd);
+      player.on("adPlay", function () { adPlaying = true; hidePauseAd(); });
+      var resetAdFlag = function () { adPlaying = false; };
+      player.on("adSkipped", resetAdFlag);
+      player.on("adComplete", resetAdFlag);
+      player.on("adError", resetAdFlag);
+    }
+
+    // Custom Player Buttons
+    player.addButton("/static/skin/svg/skip-forward.svg?v=" + AVS_VERSION, "Skip OP/ED", function () {
+      player.seek(parseInt(player.getPosition()) + 90);
+    }, "skipButton");
+    
+    player.addButton("/static/skin/svg/forward_5s.svg?v=" + AVS_VERSION, "Tua tiếp 5s", function () {
+      player.seek(parseInt(player.getPosition()) + 5);
+    }, "forward5s");
+
+    player.addButton("/static/skin/svg/replay_5s.svg?v=" + AVS_VERSION, "Tua lại 5s", function () {
+      player.seek(parseInt(player.getPosition()) - 5);
+    }, "replay5s");
+
+    // Buffer Percentage Display
+    var bufferPctEl = null;
+    var isBuffering = false;
+    var updateBufferPct = function (percent) {
+      if (isBuffering) {
+        var wrapper = document.querySelector(".jw-display-icon-container.jw-display-icon-display.jw-reset");
+        if (wrapper) {
+          if (!bufferPctEl) {
+            bufferPctEl = document.createElement("span");
+            bufferPctEl.id = "avs-buffer-pct";
+            wrapper.appendChild(bufferPctEl);
+          }
+          var playerEl = document.querySelector("#player");
+          bufferPctEl.className = (playerEl && playerEl.className.indexOf("jw-breakpoint-1") > -1) ? "avs-bp1" : (playerEl && playerEl.className.indexOf("jw-breakpoint-0") > -1 ? "avs-bp0" : "avs-bp");
+          bufferPctEl.textContent = percent;
+        }
+      }
+    };
+    var removeBufferPct = function () {
+      if (bufferPctEl && bufferPctEl.parentNode) {
+        bufferPctEl.parentNode.removeChild(bufferPctEl);
+        bufferPctEl = null;
+      }
+    };
+
+    player.on("buffer", function () { isBuffering = true; });
+    player.on("play", function () { isBuffering = false; removeBufferPct(); });
+    player.on("idle", function () { isBuffering = false; removeBufferPct(); });
+    player.on("bufferChange", function (e) {
+      if (isBuffering && null != e.bufferPercent) {
+        updateBufferPct(Math.floor(e.bufferPercent) + "%");
+      }
+    });
+
+    // Safari-specific buffer polling
+    if (isSafari) {
+      var video = null;
+      var getVideo = function () { return video || (video = document.querySelector("#player video")), video; };
+      var getPercent = function () {
+        var v = getVideo();
+        if (!v || !v.duration || !isFinite(v.duration)) return null;
+        var buffered = v.buffered;
+        if (!buffered || 0 === buffered.length) return 0;
+        return Math.floor((buffered.end(buffered.length - 1) / v.duration) * 100);
+      };
+      var onWaiting = function () { isBuffering = true; var p = getPercent(); if (null != p) updateBufferPct(p + "%"); };
+      var onProgress = function () { if (isBuffering) { var p = getPercent(); if (null != p) updateBufferPct(p + "%"); } };
+      var onPlaying = function () { isBuffering = false; removeBufferPct(); };
+      
+      player.on("ready", function () {
+        setTimeout(function () {
+          var v = getVideo();
+          if (v) {
+            v.addEventListener("waiting", onWaiting);
+            v.addEventListener("progress", onProgress);
+            v.addEventListener("playing", onPlaying);
+            v.addEventListener("canplay", onPlaying);
+          }
+        }, 300);
+      });
+    }
+
+    // Status Overlay and Error Handling
+    var statusOverlay = null;
+    var statusTimer = null;
+    var hideStatus = function () {
+      clearInterval(statusTimer);
+      if (statusOverlay) statusOverlay.style.display = "none";
+    };
+
+    var showStatus = function (icon, title, msg, time, isError) {
+      var overlay = statusOverlay || (function () {
+        var el = document.createElement("div");
+        el.id = "avs-status-overlay";
+        el.style.cssText = [
+          "position:fixed", "top:0;left:0;right:0;bottom:0",
+          "background:rgba(0,0,0,0.88)", "z-index:99999",
+          "display:none", "flex-direction:column", "align-items:center", "justify-content:center",
+          "color:#fff", "font-family:Arial,Helvetica,sans-serif", "text-align:center",
+          "padding:16px", "box-sizing:border-box", "overflow-y:auto", "-webkit-overflow-scrolling:touch"
+        ].join(";");
+        document.body.appendChild(el);
+        statusOverlay = el;
+        return el;
+      })();
+
+      overlay.innerHTML =
+        '<div style="max-width:min(320px,90%);width:100%">' +
+          '<div style="font-size:clamp(28px,8vw,42px);margin-bottom:8px">' + icon + '</div>' +
+          '<div style="font-size:clamp(14px,4vw,18px);font-weight:700;margin-bottom:6px;line-height:1.3">' + title + '</div>' +
+          '<div style="font-size:clamp(11px,3vw,13px);color:rgba(255,255,255,0.65);line-height:1.6">' + msg + "</div>" +
+          (!isError && time > 0 ? '<div id="avs-status-count" style="font-size:clamp(24px,8vw,36px);font-weight:700;color:#e62117;margin-top:10px">' + time + "s</div>" : "") +
+          (isError ? '<button onclick="window.location.reload()" style="margin-top:14px;padding:10px 22px;background:#e62117;color:#fff;border:none;border-radius:6px;font-size:clamp(12px,3.5vw,14px);font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation">🔄 Tải lại trang</button>' : "") +
+        "</div>";
+      overlay.style.display = "flex";
+    };
+
+    var showStatusCount = function (icon, title, msg, time, callback) {
+      showStatus(icon, title, msg, time, false);
+      var count = time;
+      clearInterval(statusTimer);
+      statusTimer = setInterval(function () {
+        count--;
+        var countEl = document.getElementById("avs-status-count");
+        if (countEl) countEl.textContent = count + "s";
+        if (count <= 0) {
+          clearInterval(statusTimer);
+          hideStatus();
+          if (callback) callback();
+        }
+      }, 1000);
+    };
+
+    var isRateLimited = false;
+    var isErrorOverlayShown = false;
+
+    // Monkey-patch XMLHttpRequest to detect errors and rate limits
+    var originalOpen = XMLHttpRequest.prototype.open;
+    var originalSend = XMLHttpRequest.prototype.send;
+
+    var onRateLimit = function (time) {
+      if (!isRateLimited) {
+        isRateLimited = true;
+        try { player.pause(); } catch (e) {}
+        showStatusCount("⌛", "Tua quá nhanh", "Bạn đang tua quá nhanh. Vui lòng chờ để hệ thống tiếp tục tải video.", time, function () {
+          isRateLimited = false;
+          try { player.play(); } catch (e) {}
+        });
+      }
+    };
+
+    window._avsOnRateLimit = onRateLimit;
+
+    XMLHttpRequest.prototype.open = function (method, url) {
+      this._avsUrl = url;
+      if (!isSafari) {
+        this.addEventListener("progress", function (e) {
+          if (isBuffering) {
+            var percent = e.lengthComputable ? Math.floor((e.loaded / e.total) * 100) + "%" : "";
+            if (percent) updateBufferPct(percent);
+          }
+        });
+      }
+      originalOpen.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.send = function () {
+      this.addEventListener("load", function () {
+        var url = this._avsUrl || "";
+        if (url.indexOf("/chunks/") !== -1 || url.indexOf("/playlist/") !== -1) {
+          if (403 !== this.status) {
+            if (429 === this.status) {
+              var time = 0;
+              try { time = parseInt(this.getResponseHeader("Retry-After") || "0") || 0; } catch (e) {}
+              var wait = time > 0 ? time : 15;
+              console.warn("[AVS] Rate limited (429), waiting " + wait + "s before resume");
+              onRateLimit(wait);
+              return;
+            }
+            if (503 === this.status || 502 === this.status) {
+              console.warn("[AVS] Server overloaded (" + this.status + ")");
+              showStatusCount("🛠️", "Máy chủ đang quá tải", "Hệ thống đang xử lý quá nhiều yêu cầu. Vui lòng chờ trong giây lát.", 10, function () {
+                try { player.play(); } catch (e) {}
+              });
+            }
+          } else {
+            // Handle 403 Forbidden
+            (function (responseText) {
+              var errorMsg = "";
+              try { errorMsg = JSON.parse(responseText || "{}").error || ""; } catch (e) {}
+              
+              var forbiddenErrors = ["Session expired or invalid", "session expired", "Session mismatch", "Session key mismatch", "Forbidden", "Bot detected"];
+              var isForbidden = false;
+              for (var i = 0; i < forbiddenErrors.length; i++) {
+                if (errorMsg.toLowerCase().indexOf(forbiddenErrors[i].toLowerCase()) !== -1) {
+                  isForbidden = true; break;
+                }
+              }
+              if ((errorMsg && errorMsg !== "" && "Forbidden" !== errorMsg) || (isForbidden = true), isForbidden) {
+                if (isErrorOverlayShown) return;
+                isErrorOverlayShown = true;
+                console.warn("[AVS] 403 auto-reload, errType:", errorMsg);
+                try {
+                  var pos = player.getPosition();
+                  if (pos > 0) sessionStorage.setItem("avs_resume_" + id, String(Math.floor(pos)));
+                } catch (e) {}
+                window.location.reload();
+              } else {
+                showStatus("🔐", "Không có quyền truy cập", "Đường dẫn video không hợp lệ hoặc đã hết hạn. Vui lòng tải lại trang để thử lại.", 0, true);
+              }
+            })(this.responseText);
+          }
+        }
+      });
+      originalSend.apply(this, arguments);
+    };
+
+    player.on("ready", function () {
+      $("#loading").hide(300);
+      var resumePos = null;
+      try {
+        resumePos = sessionStorage.getItem("avs_resume_" + id);
+        if (resumePos) sessionStorage.removeItem("avs_resume_" + id);
+      } catch (e) {}
+      
+      if (resumePos) {
+        var pos = parseInt(resumePos);
+        if (pos > 0) {
+          console.log("[AVS] Restoring position after sid renewal:", pos);
+          player.once("firstFrame", function () { player.seek(pos); });
+        }
+      } else {
+        setTimeout(function () { checkResume(player); }, 500);
+      }
+    });
+
+    player.on("time", function () { saveResumePosition(player); checkNextEpisode(player); });
+    player.on("complete", function () { if (nextUrl) window.top.location.href = nextUrl; });
+
+    player.on("error", function (e) {
+      if (isRateLimited) {
+        console.warn("[JW] error suppressed while rate-limited", e);
+      } else {
+        console.error("[JW] error", e);
+        var code = e && e.code ? e.code : 0;
+        var msg = (100100 === code || 100101 === code)
+          ? "Không tìm thấy video. Video có thể đã bị xóa hoặc đường dẫn không hợp lệ."
+          : (code >= 100200 && code < 100300)
+            ? "Không thể tải video. Vui lòng kiểm tra kết nối mạng và thử lại."
+            : (code >= 200000 && code < 300000)
+              ? "Trình duyệt không hỗ trợ định dạng video này. Vui lòng thử trình duyệt khác."
+              : (code >= 300000 && code < 400000)
+                ? "Lỗi tải danh sách phát (playlist). Vui lòng tải lại trang."
+                : (code >= 400000 && code < 500000)
+                  ? "Lỗi tải đoạn video. Vui lòng kiểm tra kết nối và thử lại."
+                  : "Đã xảy ra lỗi khi phát video. Vui lòng tải lại trang.";
+        showStatus("❌", "Lỗi phát video", msg + '<br><br><span style="font-size:11px;color:rgba(255,255,255,0.4)">Mã lỗi: ' + code + "</span>", 0, true);
+      }
+    });
+
+    player.on("setupError", function (e) {
+      console.error("[JW] setupError", e);
+      showStatus("⚙️", "Không thể khởi động player", 'Đã xảy ra lỗi khi khởi tạo trình phát. Vui lòng tải lại trang.<br><br><span style="font-size:11px;color:rgba(255,255,255,0.4)">Mã lỗi: ' + (e && e.code ? e.code : "N/A") + "</span>", 0, true);
+    });
+
+    player.on("bufferFull", hideStatus);
+    player.on("play", hideStatus);
+  });
+};
+
+// --- Helper Functions for Startup ---
+
+function waitForJwplayer(callback, count) {
+  count = count || 0;
+  if (typeof jwplayer === "function") {
+    callback();
+  } else if (count < 50) {
+    setTimeout(function () { waitForJwplayer(callback, count + 1); }, 100);
+  } else {
+    showError("Không thể tải player. Vui lòng tải lại trang.");
+  }
+}
+
+// Processing Status Logic
+var POLL_INTERVAL = 5000;
+var pollTimer = null;
+var tickTimer = null;
+var processingStartedAt = null;
+var lastPollPercent = 0;
+var lastPollTime = 0;
+var prevPollPercent = 0;
+var prevPollTime = 0;
+var pctPerMs = 0;
+var displayPercent = 0;
+
+var formatTime = function (sec) {
+  if (sec < 0) sec = 0;
+  var min = Math.floor(sec / 60);
+  var s = sec % 60;
+  return min.toString().padStart(2, "0") + ":" + s.toString().padStart(2, "0");
+};
+
+var onPollUpdate = function (percent) {
+  prevPollPercent = lastPollPercent;
+  prevPollTime = lastPollTime;
+  lastPollPercent = percent;
+  lastPollTime = Date.now();
+  if (prevPollTime > 0 && lastPollTime > prevPollTime && lastPollPercent > prevPollPercent) {
+    pctPerMs = (lastPollPercent - prevPollPercent) / (lastPollTime - prevPollTime);
+  }
+  if (percent > displayPercent) displayPercent = percent;
+};
+
+var tick = function () {
+  var fillEl = document.getElementById("avs-progress-fill");
+  var pctEl = document.getElementById("avs-percent");
+  var elapsedEl = document.getElementById("avs-elapsed");
+
+  if (pctPerMs > 0 && displayPercent < 99) {
+    var elapsedMs = Date.now() - lastPollTime;
+    displayPercent = Math.max(displayPercent, Math.min(lastPollPercent + pctPerMs * elapsedMs, 99));
+  }
+
+  var displayInt = Math.round(displayPercent);
+  if (fillEl) fillEl.style.width = displayInt + "%";
+  if (pctEl) pctEl.textContent = displayInt + "%";
+  
+  if (elapsedEl) {
+    if (pctPerMs > 0 && displayPercent > 0 && displayPercent < 100) {
+      var remainSec = Math.round((100 - displayPercent) / pctPerMs / 1000);
+      elapsedEl.textContent = "Còn khoảng " + formatTime(remainSec);
+    } else if (displayPercent > 0 && processingStartedAt) {
+      var durSec = (Date.now() - processingStartedAt) / 1000;
+      var remainSec = Math.round((durSec * (100 - displayPercent)) / displayPercent);
+      elapsedEl.textContent = "Còn khoảng " + formatTime(remainSec);
+    } else {
+      elapsedEl.textContent = "Đang chuẩn bị...";
+    }
+  }
+};
+
+var startTicker = function (startTime) {
+  if (!tickTimer) {
+    processingStartedAt = startTime ? new Date(startTime).getTime() : Date.now();
+    tick();
+    tickTimer = setInterval(tick, 1000);
+  }
+};
+
+var stopTicker = function () {
+  if (tickTimer) {
+    clearInterval(tickTimer);
+    tickTimer = null;
+  }
+};
+
+var showProcessing = function (startTime, percent) {
+  var procEl = document.getElementById("avs-processing");
+  if (procEl) procEl.style.display = "";
+  onPollUpdate(percent || 0);
+  startTicker(startTime);
+};
+
+var hideProcessing = function () {
+  stopTicker();
+  var procEl = document.getElementById("avs-processing");
+  if (procEl) procEl.style.display = "none";
+};
+
+var showVideoError = function (msg) {
+  hideProcessing();
+  var errEl = document.getElementById("avs-error");
+  var msgEl = document.getElementById("avs-error-msg");
+  if (msgEl) msgEl.textContent = msg || "Đã xảy ra lỗi khi xử lý video.";
+  if (errEl) errEl.style.display = "";
+};
+
+var checkProcessingStatus = function (callback) {
+  $.getJSON("/status/" + id)
+    .done(function (res) {
+      if ("ok" !== res.status || !res.data) {
+        console.warn("[AVS status] Unexpected response, proceeding to player");
+        return void callback();
+      }
+      var data = res.data;
+      if (data.error) {
+        console.error("[AVS status] Video error:", data.error_message);
+        showVideoError(data.error_message || "Đã xảy ra lỗi khi xử lý video.");
+      } else if (data.processing) {
+        console.log("[AVS status] Processing " + data.processing_percent + "%, polling...");
+        showProcessing(data.processing_started_at, data.processing_percent);
+        pollTimer = setTimeout(function () { checkProcessingStatus(callback); }, POLL_INTERVAL);
+      } else {
+        console.log("[AVS status] Video ready, initializing player");
+        hideProcessing();
+        callback();
+      }
+    })
+    .fail(function (err) {
+      if (404 === err.status) {
+        showVideoError("Video không tồn tại.");
+      } else {
+        console.warn("[AVS status] Status check failed, proceeding to player");
+        callback();
+      }
+    });
+};
+
+var startPlayer = function () {
+  checkProcessingStatus(function () {
+    waitForJwplayer(initPlayer);
+  });
+};
+
+// --- Application Entry Point ---
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.addEventListener("message", function (e) {
+    if (e.data && "SW_UPDATED" === e.data.type) {
+      console.log("[AVS] SW updated to v" + e.data.version + ", reloading for fresh assets...");
+      window.location.reload();
+    }
+  });
+
+  navigator.serviceWorker.register("/sw.js", { scope: "/", updateViaCache: "none" })
+    .then(function (registration) {
+      if (registration.active) registration.update().catch(function () {});
+      if (isSafari) {
+        var sw = registration.installing || registration.waiting;
+        if (sw) {
+          sw.addEventListener("statechange", function () {
+            if ("activated" === this.state) window.location.reload();
+          });
+        } else {
+          startPlayer();
+        }
+      } else {
+        startPlayer();
+      }
+    })
+    .catch(function () {
+      startPlayer();
+    });
+} else {
+  startPlayer();
+}

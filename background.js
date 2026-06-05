@@ -5,6 +5,7 @@ const LOGO_RULE_ID       = 100;
 const CONTENT_SCRIPT_ID  = 'avs-content';
 const ALARM_NAME         = 'avs-transform-sync';
 const ALARM_PERIOD_MIN   = 60; // re-check mỗi 1 tiếng
+const DEFAULT_HOST       = 'animevietsub.name';
 const STATIC_MATCHES     = ['*://*.googleapiscdn.com/*'];
 
 async function logoExists() {
@@ -33,33 +34,17 @@ async function fetchTransform() {
 
 async function updateContentScript(transform) {
     const matches = [...STATIC_MATCHES];
+    matches.push(`*://*.${DEFAULT_HOST}/*`);
     if (transform) {
-        matches.push(`*://*.${transform.host}/*`);
+        if (transform.host !== DEFAULT_HOST) matches.push(`*://*.${transform.host}/*`);
         for (const old of transform.old_host) matches.push(`*://*.${old}/*`);
     }
 
-    // Kiểm tra xem matches có thay đổi không — tránh re-register vô ích
+    // Luôn re-register để Chrome không giữ bản content.js cũ trong dynamic script registry.
     try {
-        const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [CONTENT_SCRIPT_ID] });
-        if (existing.length > 0) {
-            const oldMatches = existing[0].matches ?? [];
-            const same = oldMatches.length === matches.length &&
-                         matches.every(m => oldMatches.includes(m));
-            if (same) {
-                await chrome.storage.local.set({ avs_log: '[AVS-BG] Domain không đổi, skip re-register.' });
-                return;
-            }
-            // Domain đổi → update
-            await chrome.scripting.updateContentScripts([{
-                id: CONTENT_SCRIPT_ID,
-                matches
-            }]);
-            await chrome.storage.local.set({ avs_log: '[AVS-BG] Domain đổi! Script updated: ' + matches.join(', ') });
-            return;
-        }
+        await chrome.scripting.unregisterContentScripts({ ids: [CONTENT_SCRIPT_ID] });
     } catch {}
 
-    // Chưa có → register mới
     try {
         await chrome.scripting.registerContentScripts([{
             id:        CONTENT_SCRIPT_ID,
@@ -69,7 +54,7 @@ async function updateContentScript(transform) {
             allFrames: true,
             world:     'MAIN'
         }]);
-        await chrome.storage.local.set({ avs_log: '[AVS-BG] Registered: ' + matches.join(', ') });
+        await chrome.storage.local.set({ avs_log: '[AVS-BG] Re-registered content.js: ' + matches.join(', ') });
     } catch (err) {
         await chrome.storage.local.set({ avs_log: '[AVS-BG] registerContentScripts failed: ' + err.message });
     }
@@ -100,7 +85,7 @@ async function updateLogoRule(transform) {
 }
 
 async function updateDomain() {
-    const transform = await fetchTransform();
+    const transform = await fetchTransform() || { scheme: 'https', host: DEFAULT_HOST, old_host: [] };
     if (transform) await chrome.storage.local.set({ avs_transform: transform });
     await Promise.all([
         updateContentScript(transform),
